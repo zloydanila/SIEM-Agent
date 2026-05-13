@@ -1,0 +1,40 @@
+# Build
+build/
+
+# Сертификаты (секретные!)
+certs/
+
+# База данных
+*.db
+*.db-shm
+*.db-wal
+
+# Логи
+logs/
+
+# Python venv
+scripts/env/
+scripts/__pycache__/
+*.pyc
+
+# Секреты
+.env
+
+# Данные конфига (генерируются при установке)
+data/config/app_config.json
+
+# Qt Creator
+*.pro.user
+*.qbs.user
+CMakeLists.txt.user
+.qtc_clangd/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

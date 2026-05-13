@@ -1,0 +1,27 @@
+<RCC>
+    <qresource prefix="/">
+        <file>qml/main.qml</file>
+        <file>qml/styles/Theme.qml</file>
+
+        <file>qml/pages/LoginPage.qml</file>
+        <file>qml/pages/DashboardPage.qml</file>
+        <file>qml/pages/EditUserDialog.qml</file>
+        <file>qml/pages/ConfirmDeleteDialog.qml</file>
+        <file>qml/pages/RegisterUserDialog.qml</file>
+        <file>qml/pages/AlertsPage.qml</file>
+        <file>qml/pages/EventsPage.qml</file>
+        <file>qml/pages/SettingPage.qml</file>
+
+        <file>qml/components/AlertCard.qml</file>
+        <file>qml/components/Button.qml</file>
+        <file>qml/components/EventCard.qml</file>
+        <file>qml/components/Header.qml</file>
+        <file>qml/components/Slidebar.qml</file>
+
+        <file>resources/icons/alert.svg</file>
+        <file>resources/icons/dashboard.svg</file>
+        <file>resources/icons/logo.svg</file>
+        <file>qml/styles/Utils.qml</file>
+        <file>qml/pages/ChangePasswordDialog.qml</file>
+    </qresource>
+</RCC>

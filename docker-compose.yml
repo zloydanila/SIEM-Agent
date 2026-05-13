@@ -1,0 +1,13 @@
+services:
+  simulator:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.simulator
+    environment:
+      - SIEM_HOST=${SIEM_HOST:-172.17.0.1}
+      - SIEM_PORT=${SIEM_PORT:-8080}
+      - SIEM_WS_SECRET=${SIEM_WS_SECRET:-}
+      - EVENTS_PER_SECOND=${EVENTS_PER_SECOND:-2}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

@@ -1,0 +1,5 @@
+add_subdirectory(core)
+add_subdirectory(models)
+add_subdirectory(managers)
+add_subdirectory(services)
+add_subdirectory(engine)
