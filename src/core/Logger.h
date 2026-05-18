@@ -14,9 +14,7 @@ public:
     bool init(const QString &logDir = "logs");
     void close();
 
-    static void messageHandler(QtMsgType type,
-                                const QMessageLogContext &ctx,
-                                const QString &msg);
+    static void messageHandler(QtMsgType type, const QMessageLogContext &ctx, const QString &msg);
 private:
     Logger() = default;
     ~Logger() { close(); }

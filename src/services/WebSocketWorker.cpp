@@ -237,7 +237,7 @@ bool WebSocketWorker::verifyHmac(const QJsonObject &json) {
     ).toHex();
 
     if (expected != signature.toUtf8()) {
-        qWarning() << "[WSS] Отклонено: неверная HMAC-подпись";
+        qWarning() << "[WSS] Отклонено -неверная HMAC-подпись";
         return false;
     }
 
@@ -248,7 +248,6 @@ bool WebSocketWorker::verifyHmac(const QJsonObject &json) {
         while (!m_nonceLRU.isEmpty() && m_usedNonces.size() > NONCE_TRIM_TO) {
             m_usedNonces.remove(m_nonceLRU.dequeue());
         }
-        qWarning() << "[WSS] Nonce cache trimmed to" << NONCE_TRIM_TO;
     }
 
     return true;

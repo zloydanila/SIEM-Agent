@@ -76,12 +76,12 @@ int main(int argc, char *argv[])
     wsService.setSharedSecret(wsSecret);
     wsService.setDatabaseService(&dbService);
 
-    AuthManager           authManager(&dbService);
-    UserListModel         userListModel(&dbService);
-    EventListModel        eventListModel(&dbService);
-    AlertListModel        alertListModel(&dbService);
-    DashboardStatsModel   statsModel(&dbService);
-    RuleListModel         ruleListModel(&dbService);
+    AuthManager  authManager(&dbService);
+    UserListModel userListModel(&dbService);
+    EventListModel eventListModel(&dbService);
+    AlertListModel alertListModel(&dbService);
+    DashboardStatsModel statsModel(&dbService);
+    RuleListModel ruleListModel(&dbService);
 
     AlertFilterProxyModel filteredAlertModel;
     filteredAlertModel.setSourceModel(&alertListModel);

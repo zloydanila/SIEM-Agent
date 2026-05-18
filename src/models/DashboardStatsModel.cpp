@@ -16,12 +16,14 @@ void DashboardStatsModel::refresh() {
 
 void DashboardStatsModel::updateCounts() {
     m_criticalCount = m_db->getEventCountBySeverity("critical");
-    m_highCount     = m_db->getEventCountBySeverity("high");
-    m_mediumCount   = m_db->getEventCountBySeverity("medium");
-    m_lowCount      = m_db->getEventCountBySeverity("low");
-    m_totalEvents   = m_db->getTotalEventsCount();
-    m_totalAlerts   = m_db->getAlertCount();
-    m_openAlerts    = m_db->getAlertCountByStatus("open");
+    m_highCount = m_db->getEventCountBySeverity("high");
+    m_mediumCount = m_db->getEventCountBySeverity("medium");
+    m_lowCount = m_db->getEventCountBySeverity("low");
+    m_totalEvents = m_db->getTotalEventsCount();
+    m_totalAlerts = m_db->getAlertCount();
+    m_openAlerts = m_db->getAlertCountByStatus("open");
+
+    
 }
 
 void DashboardStatsModel::updateTopDevices() {
