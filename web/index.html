@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SIEM Agent</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <div id="app" class="container">
+        <aside id="sidebar" class="sidebar">
+            <div class="logo">
+                <div class="logo-icon">S</div>
+                <div>
+                    <div class="logo-title">SIEM Agent</div>
+                    <div class="logo-sub">Industrial Security</div>
+                </div>
+            </div>
+            <nav id="menu">
+                <button class="menu-btn active" data-page="dashboard">⊞ Дашборд</button>
+                <button class="menu-btn" data-page="events">📋 События</button>
+                <button class="menu-btn" data-page="alerts">🔔 Алерты</button>
+                <button class="menu-btn" data-page="settings">⚙️ Настройки</button>
+            </nav>
+            <div class="user-info">
+                <span id="user-avatar"></span>
+                <span id="user-name"></span>
+                <button id="logout-btn">→</button>
+            </div>
+        </aside>
+        <main id="content" class="content">
+            <!-- динамически заполняется JS -->
+        </main>
+    </div>
+
+    <script src="/js/api.js"></script>
+    <script src="/js/ws.js"></script>
+    <script src="/js/app.js"></script>
+</body>
+</html>

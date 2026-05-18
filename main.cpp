@@ -1,3 +1,4 @@
+#include <QCoreApplication>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -21,13 +22,16 @@
 #include "src/models/Event.h"
 #include "src/core/Logger.h"
 #include "src/services/ReportService.h"
+#include "src/server/HttpServer.h"
 
 static constexpr quint16 WS_PORT = 8080;
 
 int main(int argc, char *argv[])
 {
+    bool serverMode = QCoreApplication::arguments().contains("--server");
 
     Logger::instance().init("logs");
+
     QFile envFile(".env");
     if (envFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QTextStream in(&envFile);
@@ -41,8 +45,67 @@ int main(int argc, char *argv[])
             qputenv(key.toUtf8(), value.toUtf8());
         }
         envFile.close();
-        qInfo() << "[CONFIG] .env файл загружен";
+        qInfo() << "[CONFIG] .env загружен";
     }
+
+    if (serverMode) {
+        QCoreApplication app(argc, argv);
+
+        DatabaseService dbService("siem_server_connection");
+        if (!dbService.open()) {
+            qCritical() << "DB error:" << dbService.lastError();
+            return -1;
+        }
+
+        AuthManager authManager(&dbService);
+        UserListModel userModel(&dbService);
+        EventListModel eventModel(&dbService);
+        AlertListModel alertModel(&dbService);
+        DashboardStatsModel statsModel(&dbService);
+        RuleListModel ruleModel(&dbService);
+        ReportService reportService(&dbService);
+
+        QString wsSecret = qEnvironmentVariable("SIEM_WS_SECRET");
+        WebSocketService wsService(WS_PORT);
+        wsService.setSharedSecret(wsSecret);
+        wsService.setDatabaseService(&dbService);
+        wsService.start("certs/server.crt", "certs/server.key");
+
+        CorrelationEngine correlationEngine(&dbService);
+        QTimer cleanupTimer;
+        QObject::connect(&cleanupTimer, &QTimer::timeout,
+                         &correlationEngine, &CorrelationEngine::globalCleanup);
+        cleanupTimer.start(300000);
+
+        QObject::connect(&wsService, &WebSocketService::eventReceived,
+                         &eventModel, &EventListModel::appendNew);
+        QObject::connect(&wsService, &WebSocketService::eventReceived,
+                         &statsModel, &DashboardStatsModel::refresh);
+        QObject::connect(&wsService, &WebSocketService::alertReceived,
+                         &alertModel, &AlertListModel::refresh);
+        QObject::connect(&wsService, &WebSocketService::alertReceived,
+                         &statsModel, &DashboardStatsModel::refresh);
+        QObject::connect(&correlationEngine, &CorrelationEngine::alertCreated,
+                         &alertModel, &AlertListModel::refresh);
+        QObject::connect(&correlationEngine, &CorrelationEngine::alertCreated,
+                         &statsModel, &DashboardStatsModel::refresh);
+        QObject::connect(&wsService, &WebSocketService::eventForCorrelation,
+                         &correlationEngine, &CorrelationEngine::analyze,
+                         Qt::QueuedConnection);
+
+        QString jwtSecret = qEnvironmentVariable("JWT_SECRET", "change-me-in-production");
+        HttpServer httpServer(&dbService, &authManager, &eventModel, &alertModel,
+                              &statsModel, &userModel, &ruleModel, &reportService,
+                              jwtSecret);
+        if (!httpServer.start(8443, "certs/server.crt", "certs/server.key")) {
+            qCritical() << "HTTP server failed to start";
+            return -1;
+        }
+
+        qInfo() << "SIEM Server started. HTTPS on port 8443, WSS on port 8080.";
+        return app.exec();
+    }
+
     QGuiApplication app(argc, argv);
 
     DatabaseService dbService("siem_ui_connection");
@@ -66,8 +129,7 @@ int main(int argc, char *argv[])
 
     QString wsSecret = qEnvironmentVariable("SIEM_WS_SECRET");
     if (wsSecret.isEmpty()) {
-        qWarning() << "[CONFIG] SIEM_WS_SECRET не задан - "
-                      "WebSocket будет работать без аутентификации";
+        qWarning() << "[CONFIG] SIEM_WS_SECRET не задан";
     }
 
     CorrelationEngine correlationEngine(&dbService);
@@ -89,7 +151,7 @@ int main(int argc, char *argv[])
     QTimer *cleanupTimer = new QTimer(&app);
     QObject::connect(cleanupTimer, &QTimer::timeout,
                      &correlationEngine, &CorrelationEngine::globalCleanup);
-    cleanupTimer->start(300'000);
+    cleanupTimer->start(300000);
 
     QObject::connect(&wsService, &WebSocketService::eventReceived,
                      &eventListModel, &EventListModel::appendNew);
@@ -109,10 +171,10 @@ int main(int argc, char *argv[])
                      &eventListModel, &EventListModel::refresh);
     QObject::connect(&statsModel, &DashboardStatsModel::alertsCleared,
                      &alertListModel, &AlertListModel::refresh);
-    
+
     QObject::connect(&wsService, &WebSocketService::eventForCorrelation,
-                 &correlationEngine, &CorrelationEngine::analyze,
-                 Qt::QueuedConnection);
+                     &correlationEngine, &CorrelationEngine::analyze,
+                     Qt::QueuedConnection);
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("authManager",         &authManager);

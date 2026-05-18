@@ -22,6 +22,17 @@ find_package(Qt6 REQUIRED COMPONENTS
 
 add_subdirectory(src)
 
+add_executable(siem-server
+    main.cpp
+    src/server/HttpServer.h
+    src/server/HttpServer.cpp
+    src/server/JwtManager.h
+)
+target_include_directories(siem-server PRIVATE src)
+target_link_libraries(siem-server PRIVATE
+    Qt6::Core Qt6::Network Qt6::Sql Qt6::WebSockets
+    siem_core siem_models siem_managers siem_services siem_engine
+)
 
 add_executable(${PROJECT_NAME}
     main.cpp
