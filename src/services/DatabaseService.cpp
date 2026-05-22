@@ -3,30 +3,42 @@
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QSqlError>
-#include <QSqlRecord>
-#include <QStandardPaths>
-#include <QDir>
-#include <QUuid>
-#include <QDateTime>
 #include <QVariant>
+#include <QVariantMap>
+#include <QDir>
+#include <QStandardPaths>
+#include <QCryptographicHash>
 #include <QRandomGenerator>
+#include <QDateTime>
+#include <QUuid>
 #include <QDebug>
 
+#include "../models/User.h"
+#include "../engine/Rule.h"
+#include "../models/Event.h"
+#include "../models/Alert.h"
+#include "../engine/EventRecord.h"\
+
+
+static constexpr int PBKDF2_ITERATIONS = 100000;
+static constexpr int PBKDF2_DKLEN = 32;
+
 DatabaseService::DatabaseService(const QString &connectionName, QObject *parent)
-    : QObject(parent),
-      m_connectionName(connectionName),
-      m_opened(false) {
-    QString baseDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    if (baseDir.isEmpty()) {
-        baseDir = QDir::homePath() + "/.siem_agent";
-    }
-    QDir().mkpath(baseDir);
-    m_dbPath = baseDir + "/siem_agent.db";
-}
+    : QObject(parent), m_connectionName(connectionName), m_opened(false) {}
 
 DatabaseService::~DatabaseService() {
     close();
-    QSqlDatabase::removeDatabase(m_connectionName);
+}
+
+QString DatabaseService::lastError() const { return m_lastError; }
+
+QString DatabaseService::generateId() const {
+    return QUuid::createUuid().toString(QUuid::WithoutBraces);
+}
+
+QString DatabaseService::generateSalt() const {
+    return QUuid::createUuid().toString(QUuid::WithoutBraces) +
+           QUuid::createUuid().toString(QUuid::WithoutBraces);
 }
 
 QSqlDatabase DatabaseService::database() const {
@@ -34,20 +46,40 @@ QSqlDatabase DatabaseService::database() const {
 }
 
 bool DatabaseService::open() {
+    return openWithPath(m_dbPath.isEmpty() ? defaultDbPath() : m_dbPath);
+}
+
+QString DatabaseService::defaultDbPath() {
+    QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (base.isEmpty()) base = QDir::homePath() + "/.local/share/SIEMAgent";
+    QDir().mkpath(base);
+    return base + "/siemagent.db";
+}
+
+bool DatabaseService::openWithPath(const QString &path) {
+    if (m_opened) close();
+
     if (QSqlDatabase::contains(m_connectionName)) {
-        auto db = QSqlDatabase::database(m_connectionName);
-        if (db.isOpen()) {
-            m_opened = true;
-            return true;
-        }
+        QSqlDatabase existing = QSqlDatabase::database(m_connectionName, false);
+        if (existing.isValid()) existing.close();
+        QSqlDatabase::removeDatabase(m_connectionName);
     }
 
     QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", m_connectionName);
+
+    if (path.isEmpty()) {
+        QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        if (base.isEmpty()) base = QDir::homePath() + "/.local/share/SIEMAgent";
+        QDir().mkpath(base);
+        m_dbPath = base + "/siemagent.db";
+    } else {
+        m_dbPath = path;
+    }
+
     db.setDatabaseName(m_dbPath);
 
     if (!db.open()) {
         m_lastError = db.lastError().text();
-        m_opened = false;
         return false;
     }
 
@@ -56,313 +88,250 @@ bool DatabaseService::open() {
 }
 
 void DatabaseService::close() {
-    if (QSqlDatabase::contains(m_connectionName)) {
-        auto db = QSqlDatabase::database(m_connectionName);
-        if (db.isOpen()) {
-            db.close();
-        }
+    if (!m_opened) return;
+    {
+        QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+        if (db.isValid()) db.close();
     }
     m_opened = false;
 }
 
-bool DatabaseService::executeQuery(const QString &queryText) {
-    QSqlQuery query(database());
-    if (!query.exec(queryText)) {
-        m_lastError = query.lastError().text();
-        return false;
-    }
-    return true;
-}
-
 bool DatabaseService::initSchema() {
-    if (!m_opened) {
-        return false;
-    }
+    if (!m_opened) return false;
+    QSqlQuery q(database());
 
-    const QString sql = R"(
+    if (!q.exec(R"(
         CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY,
-            username TEXT NOT NULL UNIQUE,
+            username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             salt TEXT NOT NULL,
             role TEXT NOT NULL,
-            full_name TEXT,
-            email TEXT,
+            full_name TEXT NOT NULL DEFAULT '',
+            email TEXT NOT NULL DEFAULT '',
             is_active INTEGER NOT NULL DEFAULT 1,
-            must_change_password INTEGER NOT NULL DEFAULT 0,
+            must_change_password INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL
         )
-    )";
+    )")) { m_lastError = q.lastError().text(); return false; }
 
-    const QString eventsSql = R"(
-        CREATE TABLE IF NOT EXISTS events(
-            id TEXT PRIMARY KEY,
-            device_name TEXT NOT NULL,
-            event_type TEXT NOT NULL,
-            action TEXT NOT NULL,
-            severity TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
-            raw_log TEXT,
-            location TEXT
-        )
-    )";
-
-    const QString alertsSql = R"(
-        CREATE TABLE IF NOT EXISTS alerts(
-            id TEXT PRIMARY KEY,
-            title TEXT NOT NULL,
-            description TEXT,
-            severity TEXT NOT NULL,
-            status TEXT NOT NULL,
-            device_name TEXT,
-            triggered_at TEXT NOT NULL,
-            rule_id TEXT,
-            assigned_to TEXT,
-            comment TEXT
-        )
-    )";
-
-    const QString ruleSql = R"(
-        CREATE TABLE IF NOT EXISTS rules(
+    if (!q.exec(R"(
+        CREATE TABLE IF NOT EXISTS rules (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
-            rule_type TEXT NOT NULL DEFAULT 'threshold',
+            rule_type TEXT NOT NULL,
             match_event_type TEXT NOT NULL,
-            secondary_event_type TEXT,
+            secondary_event_type TEXT NOT NULL DEFAULT '',
             threshold INTEGER NOT NULL DEFAULT 1,
             window_seconds INTEGER NOT NULL DEFAULT 60,
             cooldown_seconds INTEGER NOT NULL DEFAULT 60,
             alert_severity TEXT NOT NULL DEFAULT 'high',
             alert_title TEXT NOT NULL,
-            alert_description TEXT,
+            alert_description TEXT NOT NULL DEFAULT '',
             is_enabled INTEGER NOT NULL DEFAULT 1
         )
-    )";
+    )")) { m_lastError = q.lastError().text(); return false; }
 
-    const QString historySql = R"(
+    if (!q.exec(R"(
+        CREATE TABLE IF NOT EXISTS events (
+            id TEXT PRIMARY KEY,
+            device_name TEXT NOT NULL DEFAULT '',
+            event_type TEXT NOT NULL,
+            action TEXT NOT NULL DEFAULT '',
+            severity TEXT NOT NULL DEFAULT 'low',
+            timestamp TEXT NOT NULL,
+            raw_log TEXT NOT NULL DEFAULT '',
+            location TEXT NOT NULL DEFAULT ''
+        )
+    )")) { m_lastError = q.lastError().text(); return false; }
+
+    if (!q.exec(R"(
+        CREATE TABLE IF NOT EXISTS alerts (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            severity TEXT NOT NULL DEFAULT 'medium',
+            status TEXT NOT NULL DEFAULT 'open',
+            device_name TEXT NOT NULL DEFAULT '',
+            triggered_at TEXT NOT NULL,
+            rule_id TEXT NOT NULL DEFAULT '',
+            assigned_to TEXT NOT NULL DEFAULT '',
+            comment TEXT NOT NULL DEFAULT '',
+            related_event_ids TEXT NOT NULL DEFAULT '[]'
+        )
+    )")) { m_lastError = q.lastError().text(); return false; }
+
+    if (!q.exec(R"(
         CREATE TABLE IF NOT EXISTS correlation_history (
             id TEXT PRIMARY KEY,
             device_name TEXT NOT NULL,
             event_type TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
             created_at TEXT NOT NULL
         )
-    )";
+    )")) { m_lastError = q.lastError().text(); return false; }
 
+    if (!userExists("admin")) createDefaultAdmin();
+    seedDefaultRules();
+    return true;
+}
 
-    const QString indexesSql[] = {
-        "CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp)",
-        "CREATE INDEX IF NOT EXISTS idx_events_severity ON events(severity)",
-        "CREATE INDEX IF NOT EXISTS idx_events_device ON events(device_name)",
-        "CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)",
-        "CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status)",
-        "CREATE INDEX IF NOT EXISTS idx_alerts_severity ON alerts(severity)",
-        "CREATE INDEX IF NOT EXISTS idx_alerts_device ON alerts(device_name)",
+static bool ruleSeedExists(QSqlDatabase db, const QString &ruleType, const QString &matchEventType,
+                           const QString &secondaryEventType, const QString &name) {
+    QSqlQuery q(db);
+    q.prepare(R"(
+        SELECT 1 FROM rules
+        WHERE rule_type = :rule_type
+          AND match_event_type = :match_event_type
+          AND secondary_event_type = :secondary_event_type
+          AND name = :name
+        LIMIT 1
+    )");
+    q.bindValue(":rule_type", ruleType);
+    q.bindValue(":match_event_type", matchEventType);
+    q.bindValue(":secondary_event_type", secondaryEventType);
+    q.bindValue(":name", name);
+    return q.exec() && q.next();
+}
+
+void DatabaseService::seedDefaultRules() {
+    if (!m_opened) return;
+
+    struct SeedRule {
+        QString name;
+        QString ruleType;
+        QString matchEventType;
+        QString secondaryEventType;
+        int threshold;
+        int windowSeconds;
+        int cooldownSeconds;
+        QString alertSeverity;
+        QString alertTitle;
+        QString alertDescription;
     };
 
-    if (!executeQuery(eventsSql)) return false;
-    if (!executeQuery(sql)) return false;
-    if (!executeQuery(alertsSql)) return false;
-    if (!executeQuery(ruleSql)) return false;
-    if (!executeQuery(historySql)) return false;
-
-    for (const QString &idxSql : indexesSql) {
-        if (!executeQuery(idxSql)) {
-            qWarning() << "[DB] Не удалось создать индекс:" << m_lastError;
+    const QVector<SeedRule> seeds = {
+        {
+            "Critical events threshold",
+            "threshold",
+            "critical",
+            "",
+            1,
+            60,
+            60,
+            "high",
+            "Critical event detected",
+            "A critical event was generated"
+        },
+        {
+            "Multiple login failures",
+            "threshold",
+            "auth_failed",
+            "",
+            5,
+            300,
+            300,
+            "high",
+            "Repeated authentication failures",
+            "Several failed logins were detected within a short time"
+        },
+        {
+            "Suspicious access correlation",
+            "correlation",
+            "file_access",
+            "privilege_escalation",
+            1,
+            600,
+            600,
+            "high",
+            "Suspicious access pattern",
+            "File access followed by privilege escalation"
         }
+    };
+
+    for (const auto &s : seeds) {
+        if (ruleSeedExists(database(), s.ruleType, s.matchEventType, s.secondaryEventType, s.name))
+            continue;
+
+        Rule rule;
+        rule.id = generateId();
+        rule.name = s.name;
+        rule.ruleType = s.ruleType;
+        rule.matchEventType = s.matchEventType;
+        rule.secondaryEventType = s.secondaryEventType;
+        rule.threshold = s.threshold;
+        rule.windowSeconds = s.windowSeconds;
+        rule.cooldownSeconds = s.cooldownSeconds;
+        rule.alertSeverity = s.alertSeverity;
+        rule.alertTitle = s.alertTitle;
+        rule.alertDescription = s.alertDescription;
+        rule.isEnabled = true;
+
+        createRule(rule);
     }
-
-    QSqlQuery alterQuery(database());
-    if (!alterQuery.exec("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")) {
-        QString err = alterQuery.lastError().text();
-        if (!err.contains("duplicate column", Qt::CaseInsensitive)) {
-            m_lastError = err;
-            qWarning() << "[DB] ALTER TABLE users failed:" << err;
-        }
-    }
-
-    seedDefaultRules();
-    return createDefaultAdmin();
-}
-
-QString DatabaseService::generateId() const {
-    return QUuid::createUuid().toString(QUuid::WithoutBraces);
-}
-
-QString DatabaseService::generateSalt() const {
-    QByteArray salt(32, Qt::Uninitialized);
-    auto rng = QRandomGenerator::securelySeeded();
-    for (int i = 0; i < salt.size(); ++i) {
-        salt[i] = static_cast<char>(rng.generate() & 0xFF);
-    }
-    return salt.toHex();
 }
 
 QString DatabaseService::generateRandomPassword(int length) const {
-    const QString chars =
-        "abcdefghijklmnopqrstuvwxyz"
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        "0123456789"
-        "!@#$%^&*";
-    QString password;
-    auto rng = QRandomGenerator::securelySeeded();
+    static const char chars[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    QString out;
+    out.reserve(length);
     for (int i = 0; i < length; ++i) {
-        password.append(chars[rng.bounded(chars.size())]);
+        out.append(chars[QRandomGenerator::global()->bounded(int(sizeof(chars) - 1))]);
     }
-    return password;
+    return out;
 }
 
 bool DatabaseService::createDefaultAdmin() {
-    if (userExists("admin")) {
-        return true;
-    }
-
-    QString randomPassword = generateRandomPassword(16);
-
-    fprintf(stderr, "SIEM AGENT - Первый запуск\n");
-
-    fprintf(stderr, "Login:    admin\n");
-    fprintf(stderr, "Password: %-30s\n",
-            randomPassword.toUtf8().constData());
-    fprintf(stderr, "Поменяйте пароль после входа\n");
+    if (userExists("admin")) return true;
 
     User admin;
-    admin.id              = generateId();
-    admin.fullName        = "System Administrator";
-    admin.username        = "admin";
-    admin.role            = "admin";
-    admin.email           = "admin@localhost";
-    admin.isActive        = true;
+    admin.id = generateId();
+    admin.username = "admin";
+    admin.role = "admin";
+    admin.fullName = "Administrator";
+    admin.email = "admin@localhost";
+    admin.isActive = true;
     admin.mustChangePassword = true;
-    admin.createdAt       = QDateTime::currentDateTime();
-    admin.setPassword(randomPassword, generateSalt());
+    admin.createdAt = QDateTime::currentDateTime();
+
+    const QString tempPassword = generateRandomPassword(12);
+    admin.setPassword(tempPassword, generateSalt());
+
+    qInfo() << "[DB] default admin password:" << tempPassword;
 
     return createUser(admin);
 }
 
-bool DatabaseService::createUser(const User &user) {
+bool DatabaseService::userExists(const QString &username) const {
     if (!m_opened) return false;
-
-    QSqlQuery query(database());
-    query.prepare(R"(
-        INSERT INTO users (
-            id, username, password_hash, salt, role, full_name, email, is_active, must_change_password, created_at
-        ) VALUES (
-            :id, :username, :password_hash, :salt, :role, :full_name, :email, :is_active,:must_change_password, :created_at
-        )
-    )");
-
-    query.bindValue(":id", user.id.isEmpty() ? generateId() : user.id);
-    query.bindValue(":username", user.username);
-    query.bindValue(":password_hash", user.passwordHash);
-    query.bindValue(":salt", user.salt);
-    query.bindValue(":role", user.role);
-    query.bindValue(":full_name", user.fullName);
-    query.bindValue(":email", user.email);
-    query.bindValue(":must_change_password", user.mustChangePassword ? 1 : 0);
-    query.bindValue(":is_active", user.isActive ? 1 : 0);
-    query.bindValue(":created_at", user.createdAt.isValid() ? user.createdAt.toString(Qt::ISODate) : QDateTime::currentDateTime().toString(Qt::ISODate));
-
-    if (!query.exec()) {
-        m_lastError = query.lastError().text();
-        return false;
-    }
-
-    return true;
-}
-
-bool DatabaseService::updateUser(const User &user) {
-    if (!m_opened) return false;
-
-    QSqlQuery query(database());
-    query.prepare(R"(
-        UPDATE users SET
-            username = :username,
-            password_hash = :password_hash,
-            salt = :salt,
-            role = :role,
-            full_name = :full_name,
-            email = :email,
-            must_change_password = :must_change_password,
-            is_active = :is_active
-        WHERE id = :id
-    )");
-
-    query.bindValue(":id", user.id);
-    query.bindValue(":username", user.username);
-    query.bindValue(":password_hash", user.passwordHash);
-    query.bindValue(":salt", user.salt);
-    query.bindValue(":role", user.role);
-    query.bindValue(":full_name", user.fullName);
-    query.bindValue(":email", user.email);
-    query.bindValue(":must_change_password", user.mustChangePassword ? 1 : 0);
-    query.bindValue(":is_active", user.isActive ? 1 : 0);
-
-    if (!query.exec()) {
-        m_lastError = query.lastError().text();
-        return false;
-    }
-
-    return query.numRowsAffected() > 0;
-}
-
-bool DatabaseService::deleteUser(const QString &userId) {
-    if (!m_opened) return false;
-
-    QSqlQuery query(database());
-    query.prepare("DELETE FROM users WHERE id = :id");
-    query.bindValue(":id", userId);
-
-    if (!query.exec()) {
-        m_lastError = query.lastError().text();
-        return false;
-    }
-
-    return query.numRowsAffected() > 0;
-}
-
-bool DatabaseService::setUserActive(const QString &userId, bool active) {
-    if (!m_opened) return false;
-
-    QSqlQuery query(database());
-    query.prepare("UPDATE users SET is_active = :active WHERE id = :id");
-    query.bindValue(":active", active ? 1 : 0);
-    query.bindValue(":id", userId);
-
-    if (!query.exec()) {
-        m_lastError = query.lastError().text();
-        return false;
-    }
-
-    return query.numRowsAffected() > 0;
+    QSqlQuery q(database());
+    q.prepare("SELECT 1 FROM users WHERE username = :u LIMIT 1");
+    q.bindValue(":u", username);
+    if (!q.exec()) return false;
+    return q.next();
 }
 
 User DatabaseService::findUserByUsername(const QString &username) const {
     User user;
     if (!m_opened) return user;
 
-    QSqlQuery query(database());
-    query.prepare(R"(
+    QSqlQuery q(database());
+    q.prepare(R"(
         SELECT id, username, password_hash, salt, role, full_name, email, is_active, must_change_password, created_at
-        FROM users WHERE username = :username LIMIT 1
+        FROM users WHERE username = :u LIMIT 1
     )");
-    query.bindValue(":username", username);
+    q.bindValue(":u", username);
+    if (!q.exec() || !q.next()) return user;
 
-    if (!query.exec() || !query.next()) {
-        return user;
-    }
-
-    user.id = query.value("id").toString();
-    user.username = query.value("username").toString();
-    user.passwordHash = query.value("password_hash").toString();
-    user.salt = query.value("salt").toString();
-    user.role = query.value("role").toString();
-    user.fullName = query.value("full_name").toString();
-    user.email = query.value("email").toString();
-    user.mustChangePassword = query.value("must_change_password").toInt() == 1;
-    user.isActive = query.value("is_active").toInt() == 1;
-    user.createdAt = QDateTime::fromString(query.value("created_at").toString(), Qt::ISODate);
-
+    user.id = q.value("id").toString();
+    user.username = q.value("username").toString();
+    user.passwordHash = q.value("password_hash").toString();
+    user.salt = q.value("salt").toString();
+    user.role = q.value("role").toString();
+    user.fullName = q.value("full_name").toString();
+    user.email = q.value("email").toString();
+    user.isActive = q.value("is_active").toInt() == 1;
+    user.mustChangePassword = q.value("must_change_password").toInt() == 1;
+    user.createdAt = QDateTime::fromString(q.value("created_at").toString(), Qt::ISODate);
     return user;
 }
 
@@ -370,28 +339,24 @@ User DatabaseService::findUserById(const QString &userId) const {
     User user;
     if (!m_opened) return user;
 
-    QSqlQuery query(database());
-    query.prepare(R"(
+    QSqlQuery q(database());
+    q.prepare(R"(
         SELECT id, username, password_hash, salt, role, full_name, email, is_active, must_change_password, created_at
         FROM users WHERE id = :id LIMIT 1
     )");
-    query.bindValue(":id", userId);
+    q.bindValue(":id", userId);
+    if (!q.exec() || !q.next()) return user;
 
-    if (!query.exec() || !query.next()) {
-        return user;
-    }
-
-    user.id = query.value("id").toString();
-    user.username = query.value("username").toString();
-    user.passwordHash = query.value("password_hash").toString();
-    user.salt = query.value("salt").toString();
-    user.role = query.value("role").toString();
-    user.fullName = query.value("full_name").toString();
-    user.email = query.value("email").toString();
-    user.mustChangePassword = query.value("must_change_password").toInt() == 1;
-    user.isActive = query.value("is_active").toInt() == 1;
-    user.createdAt = QDateTime::fromString(query.value("created_at").toString(), Qt::ISODate);
-
+    user.id = q.value("id").toString();
+    user.username = q.value("username").toString();
+    user.passwordHash = q.value("password_hash").toString();
+    user.salt = q.value("salt").toString();
+    user.role = q.value("role").toString();
+    user.fullName = q.value("full_name").toString();
+    user.email = q.value("email").toString();
+    user.isActive = q.value("is_active").toInt() == 1;
+    user.mustChangePassword = q.value("must_change_password").toInt() == 1;
+    user.createdAt = QDateTime::fromString(q.value("created_at").toString(), Qt::ISODate);
     return user;
 }
 
@@ -399,442 +364,136 @@ QVector<User> DatabaseService::getAllUsers() const {
     QVector<User> users;
     if (!m_opened) return users;
 
-    QSqlQuery query(database());
-    if (!query.exec(R"(
+    QSqlQuery q(database());
+    if (!q.exec(R"(
         SELECT id, username, password_hash, salt, role, full_name, email, is_active, must_change_password, created_at
         FROM users ORDER BY username
-    )")) {
-        return users;
-    }
+    )")) return users;
 
-    while (query.next()) {
+    while (q.next()) {
         User user;
-        user.id = query.value("id").toString();
-        user.username = query.value("username").toString();
-        user.passwordHash = query.value("password_hash").toString();
-        user.salt = query.value("salt").toString();
-        user.role = query.value("role").toString();
-        user.fullName = query.value("full_name").toString();
-        user.email = query.value("email").toString();
-        user.isActive = query.value("is_active").toInt() == 1;
-        user.createdAt = QDateTime::fromString(query.value("created_at").toString(), Qt::ISODate);
+        user.id = q.value("id").toString();
+        user.username = q.value("username").toString();
+        user.passwordHash = q.value("password_hash").toString();
+        user.salt = q.value("salt").toString();
+        user.role = q.value("role").toString();
+        user.fullName = q.value("full_name").toString();
+        user.email = q.value("email").toString();
+        user.isActive = q.value("is_active").toInt() == 1;
+        user.mustChangePassword = q.value("must_change_password").toInt() == 1;
+        user.createdAt = QDateTime::fromString(q.value("created_at").toString(), Qt::ISODate);
         users.append(user);
     }
-
     return users;
 }
 
-bool DatabaseService::userExists(const QString &username) const {
+bool DatabaseService::createUser(const User &user) {
     if (!m_opened) return false;
-
-    QSqlQuery query(database());
-    query.prepare("SELECT 1 FROM users WHERE username = :username LIMIT 1");
-    query.bindValue(":username", username);
-
-    if (!query.exec()) {
-        return false;
-    }
-
-    return query.next();
-}
-
-bool DatabaseService::createEvent(const Event &event){
-    if (!m_opened) return false;
-    QSqlQuery query(database());
-    
-    query.prepare(R"(
-        INSERT INTO events(
-            id, device_name, event_type, action, severity, timestamp, raw_log, location)
-            VALUES (:id, :device_name, :event_type, :action, :severity, :timestamp, :raw_log, :location)
+    QSqlQuery q(database());
+    q.prepare(R"(
+        INSERT INTO users (id, username, password_hash, salt, role, full_name, email, is_active, must_change_password, created_at)
+        VALUES (:id, :username, :password_hash, :salt, :role, :full_name, :email, :is_active, :must_change_password, :created_at)
     )");
-
-    query.bindValue(":id", event.id.isEmpty() ? generateId() : event.id);
-    query.bindValue(":device_name", event.deviceName);
-    query.bindValue(":event_type", event.eventType);
-    query.bindValue(":action", event.action);
-    query.bindValue(":severity", event.severity);
-    query.bindValue(":timestamp", event.timestamp.toString(Qt::ISODate));
-    query.bindValue(":raw_log", event.rawLog);
-    query.bindValue(":location", event.location);
-
-    if(!query.exec()){
-        m_lastError = query.lastError().text();
-        return false;
-    }
-
+    q.bindValue(":id", user.id.isEmpty() ? generateId() : user.id);
+    q.bindValue(":username", user.username);
+    q.bindValue(":password_hash", user.passwordHash);
+    q.bindValue(":salt", user.salt);
+    q.bindValue(":role", user.role);
+    q.bindValue(":full_name", user.fullName);
+    q.bindValue(":email", user.email);
+    q.bindValue(":is_active", user.isActive ? 1 : 0);
+    q.bindValue(":must_change_password", user.mustChangePassword ? 1 : 0);
+    q.bindValue(":created_at", user.createdAt.isValid() ? user.createdAt.toString(Qt::ISODate) : QDateTime::currentDateTime().toString(Qt::ISODate));
+    if (!q.exec()) { m_lastError = q.lastError().text(); return false; }
     return true;
 }
 
-QVector<Event> DatabaseService::getRecentEvents(int limit, int offset) const{
-    QVector<Event> events;
-    if(!m_opened) return events;
-
-    QSqlQuery query(database());
-    query.prepare("SELECT * FROM events ORDER BY timestamp DESC LIMIT :limit OFFSET :offset");
-    query.bindValue(":limit", limit);
-    query.bindValue(":offset", offset);
-    if(!query.exec()) return events;
-
-    while (query.next()) {
-        Event e;
-        e.id = query.value("id").toString();
-        e.deviceName = query.value("device_name").toString();
-        e.eventType = query.value("event_type").toString();
-        e.action = query.value("action").toString();
-        e.severity = query.value("severity").toString();
-        e.timestamp = QDateTime::fromString(query.value("timestamp").toString(), Qt::ISODate);
-        e.rawLog = query.value("raw_log").toString();
-        e.location = query.value("location").toString();
-        events.append(e);
-    }
-
-    return events;
-}
-
-QVector<Event> DatabaseService::getEventsPaged(int limit,
-                                                const QString &lastId,
-                                                const QDateTime &lastTimestamp) const {
-    QVector<Event> events;
-    if (!m_opened) return events;
-
-    QSqlQuery query(database());
-
-    if (lastId.isEmpty() || !lastTimestamp.isValid()) {
-        query.prepare(R"(
-            SELECT id, device_name, event_type, action, severity,
-                   timestamp, raw_log, location
-            FROM events
-            ORDER BY timestamp DESC, id DESC
-            LIMIT :limit
-        )");
-        query.bindValue(":limit", limit);
-    } else {
-
-        query.prepare(R"(
-            SELECT id, device_name, event_type, action, severity,
-                   timestamp, raw_log, location
-            FROM events
-            WHERE (timestamp < :last_ts)
-               OR (timestamp = :last_ts2 AND id < :last_id)
-            ORDER BY timestamp DESC, id DESC
-            LIMIT :limit
-        )");
-        query.bindValue(":last_ts",  lastTimestamp.toString(Qt::ISODate));
-        query.bindValue(":last_ts2", lastTimestamp.toString(Qt::ISODate));
-        query.bindValue(":last_id",  lastId);
-        query.bindValue(":limit",    limit);
-    }
-
-    if (!query.exec()) return events;
-
-    while (query.next()) {
-        Event e;
-        e.id         = query.value("id").toString();
-        e.deviceName = query.value("device_name").toString();
-        e.eventType  = query.value("event_type").toString();
-        e.action     = query.value("action").toString();
-        e.severity   = query.value("severity").toString();
-        e.timestamp  = QDateTime::fromString(
-                           query.value("timestamp").toString(), Qt::ISODate);
-        e.rawLog     = query.value("raw_log").toString();
-        e.location   = query.value("location").toString();
-        events.append(e);
-    }
-    return events;
-}
-
-QVector<Event> DatabaseService::getEventsByDateRange(const QDateTime &from, const QDateTime &to) const {
-    QVector<Event> events;
-    if (!m_opened) return events;
-
-    QSqlQuery query(database());
-    query.prepare("SELECT * FROM events WHERE timestamp BETWEEN :from AND :to ORDER BY timestamp DESC");
-    query.bindValue(":from", from.toString(Qt::ISODate));
-    query.bindValue(":to", to.toString(Qt::ISODate));
-
-    if (!query.exec()) return events;
-
-    while (query.next()) {
-        Event e;
-        e.id = query.value("id").toString();
-        e.deviceName = query.value("device_name").toString();
-        e.eventType = query.value("event_type").toString();
-        e.action = query.value("action").toString();
-        e.severity = query.value("severity").toString();
-        e.timestamp = QDateTime::fromString(query.value("timestamp").toString(), Qt::ISODate);
-        e.rawLog = query.value("raw_log").toString();
-        e.location = query.value("location").toString();
-        events.append(e);
-    }
-    return events;
-}
-
-int DatabaseService::getTotalEventsCount() const {
-    if (!m_opened) return 0;
-    QSqlQuery query(database());
-    if (query.exec("SELECT COUNT(*) FROM events") && query.next()) {
-        return query.value(0).toInt();
-    }
-    return 0;
-}
-
-bool DatabaseService::createAlert(const Alert &alert) {
+bool DatabaseService::updateUser(const User &user) {
     if (!m_opened) return false;
-
-    QSqlQuery query(database());
-    query.prepare(R"(
-        INSERT INTO alerts (id, title, description, severity, status, device_name, triggered_at, rule_id, assigned_to, comment)
-        VALUES (:id, :title, :description, :severity, :status, :device_name, :triggered_at, :rule_id, :assigned_to, :comment)
-    )");
-
-    query.bindValue(":id", alert.id.isEmpty() ? generateId() : alert.id);
-    query.bindValue(":title", alert.title);
-    query.bindValue(":description", alert.description);
-    query.bindValue(":severity", alert.severity);
-    query.bindValue(":status", alert.status);
-    query.bindValue(":device_name", alert.deviceName);
-    query.bindValue(":triggered_at", alert.triggeredAt.toString(Qt::ISODate));
-    query.bindValue(":rule_id", alert.ruleId);
-    query.bindValue(":assigned_to", alert.assignedTo);
-    query.bindValue(":comment", alert.comment);
-
-    if (!query.exec()) {
-        m_lastError = query.lastError().text();
-        return false;
-    }
-    return true;
-}
-
-bool DatabaseService::updateAlert(const Alert &alert) {
-    if (!m_opened) return false;
-
-    QSqlQuery query(database());
-    query.prepare(R"(
-        UPDATE alerts SET
-            title = :title,
-            description = :description,
-            severity = :severity,
-            status = :status,
-            device_name = :device_name,
-            triggered_at = :triggered_at,
-            rule_id = :rule_id,
-            assigned_to = :assigned_to,
-            comment = :comment
+    QSqlQuery q(database());
+    q.prepare(R"(
+        UPDATE users SET
+            username = :username,
+            password_hash = :password_hash,
+            salt = :salt,
+            role = :role,
+            full_name = :full_name,
+            email = :email,
+            is_active = :is_active,
+            must_change_password = :must_change_password,
+            created_at = :created_at
         WHERE id = :id
     )");
-
-    query.bindValue(":id", alert.id);
-    query.bindValue(":title", alert.title);
-    query.bindValue(":description", alert.description);
-    query.bindValue(":severity", alert.severity);
-    query.bindValue(":status", alert.status);
-    query.bindValue(":device_name", alert.deviceName);
-    query.bindValue(":triggered_at", alert.triggeredAt.toString(Qt::ISODate));
-    query.bindValue(":rule_id", alert.ruleId);
-    query.bindValue(":assigned_to", alert.assignedTo);
-    query.bindValue(":comment", alert.comment);
-
-    if (!query.exec()) {
-        m_lastError = query.lastError().text();
-        return false;
-    }
-    return true;
+    q.bindValue(":id", user.id);
+    q.bindValue(":username", user.username);
+    q.bindValue(":password_hash", user.passwordHash);
+    q.bindValue(":salt", user.salt);
+    q.bindValue(":role", user.role);
+    q.bindValue(":full_name", user.fullName);
+    q.bindValue(":email", user.email);
+    q.bindValue(":is_active", user.isActive ? 1 : 0);
+    q.bindValue(":must_change_password", user.mustChangePassword ? 1 : 0);
+    q.bindValue(":created_at", user.createdAt.isValid() ? user.createdAt.toString(Qt::ISODate) : QDateTime::currentDateTime().toString(Qt::ISODate));
+    if (!q.exec()) { m_lastError = q.lastError().text(); return false; }
+    return q.numRowsAffected() > 0;
 }
 
-QVector<Alert> DatabaseService::getActiveAlerts() const {
-    QVector<Alert> alerts;
-    if (!m_opened) return alerts;
-
-    QSqlQuery query(database());
-    if (!query.exec("SELECT * FROM alerts WHERE status != 'closed' ORDER BY triggered_at DESC")) {
-        return alerts;
-    }
-
-    while (query.next()) {
-        Alert a;
-        a.id = query.value("id").toString();
-        a.title = query.value("title").toString();
-        a.description = query.value("description").toString();
-        a.severity = query.value("severity").toString();
-        a.status = query.value("status").toString();
-        a.deviceName = query.value("device_name").toString();
-        a.triggeredAt = QDateTime::fromString(query.value("triggered_at").toString(), Qt::ISODate);
-        a.ruleId = query.value("rule_id").toString();
-        a.assignedTo = query.value("assigned_to").toString();
-        a.comment = query.value("comment").toString();
-        alerts.append(a);
-    }
-    return alerts;
+bool DatabaseService::deleteUser(const QString &userId) {
+    if (!m_opened) return false;
+    QSqlQuery q(database());
+    q.prepare("DELETE FROM users WHERE id = :id");
+    q.bindValue(":id", userId);
+    if (!q.exec()) { m_lastError = q.lastError().text(); return false; }
+    return q.numRowsAffected() > 0;
 }
 
-QVector<Alert> DatabaseService::getAllAlerts() const {
-    QVector<Alert> alerts;
-    if (!m_opened) return alerts;
-
-    QSqlQuery query(database());
-    if (!query.exec("SELECT * FROM alerts ORDER BY triggered_at DESC")) {
-        return alerts;
-    }
-
-    while (query.next()) {
-        Alert a;
-        a.id = query.value("id").toString();
-        a.title = query.value("title").toString();
-        a.description = query.value("description").toString();
-        a.severity = query.value("severity").toString();
-        a.status = query.value("status").toString();
-        a.deviceName = query.value("device_name").toString();
-        a.triggeredAt = QDateTime::fromString(query.value("triggered_at").toString(), Qt::ISODate);
-        a.ruleId = query.value("rule_id").toString();
-        a.assignedTo = query.value("assigned_to").toString();
-        a.comment = query.value("comment").toString();
-        alerts.append(a);
-    }
-    return alerts;
+bool DatabaseService::setUserActive(const QString &userId, bool active) {
+    if (!m_opened) return false;
+    QSqlQuery q(database());
+    q.prepare("UPDATE users SET is_active = :a WHERE id = :id");
+    q.bindValue(":id", userId);
+    q.bindValue(":a", active ? 1 : 0);
+    if (!q.exec()) { m_lastError = q.lastError().text(); return false; }
+    return q.numRowsAffected() > 0;
 }
 
-int DatabaseService::getAlertCountBySeverity(const QString &severity) const {
-    if (!m_opened) return 0;
-    QSqlQuery query(database());
-    query.prepare("SELECT COUNT(*) FROM alerts WHERE severity = :severity AND status != 'closed'");
-    query.bindValue(":severity", severity);
-    if (query.exec() && query.next()) {
-        return query.value(0).toInt();
-    }
-    return 0;
-}
-
-int DatabaseService::getAlertCountByStatus(const QString &status) const {
-    if (!m_opened) return 0;
-    QSqlQuery query(database());
-    query.prepare("SELECT COUNT(*) FROM alerts WHERE status = :status");
-    query.bindValue(":status", status);
-    if (query.exec() && query.next()) {
-        return query.value(0).toInt();
-    }
-    return 0;
-}
-
-int DatabaseService::getEventCountBySeverity(const QString &severity) const{
-    if(!m_opened) return 0;
-    QSqlQuery query(database());
-    query.prepare("SELECT COUNT(*) FROM events WHERE severity = :severity");
-    query.bindValue(":severity", severity);
-    if(query.exec() && query.next()){
-        return query.value(0).toInt();
-    }
-    return 0;
-}
-
-QVariantList DatabaseService::getTopDevices(int limit) const{
-    QVariantList list;
-    if(!m_opened) return list;
-    QSqlQuery query(database());
-    query.prepare("SELECT device_name, COUNT(*) as cnt FROM events GROUP BY device_name ORDER BY cnt DESC LIMIT :limit");
-    query.bindValue(":limit", limit);
-    if(query.exec()){
-        while(query.next()){
-            QVariantMap item;
-            item["name"] = query.value("device_name").toString();
-            item["count"] = query.value("cnt").toInt();
-            list.append(item);
-        }
-    }
-    return list;
-}
-
-QVariantList DatabaseService::getActivityLast7Hours() const {
-    QVariantList list;
-    if (!m_opened) return list;
-
-    QSqlQuery query(database());
-
-    query.prepare(R"(
-        SELECT strftime('%H:00', timestamp, 'localtime') AS hour,
-               COUNT(*) AS cnt
-        FROM events
-        WHERE timestamp >= datetime('now', '-7 hours')
-        GROUP BY strftime('%Y-%m-%d %H', timestamp, 'localtime')
-        ORDER BY strftime('%Y-%m-%d %H', timestamp, 'localtime')
-    )");
-
-    if (query.exec()) {
-        while (query.next()) {
-            QVariantMap item;
-            item["hour"]  = query.value("hour").toString();
-            item["count"] = query.value("cnt").toInt();
-            list.append(item);
-        }
-    }
-    return list;
-}
-
-int DatabaseService::getAlertCount() const{
-    if(!m_opened) return 0;
-    QSqlQuery query(database());
-    query.exec("SELECT COUNT(*) FROM alerts");
-    return query.next() ? query.value(0).toInt() : 0;
-}
-
-int DatabaseService::getEventCount() const{
-    if(!m_opened) return 0;
-    QSqlQuery query(database());
-    query.exec("SELECT COUNT(*) FROM events");
-    return query.next() ? query.value(0).toInt() : 0;
-}
-
-bool DatabaseService::setMustChangePassword(const QString &userId, bool value){
-    if(!m_opened) return false;
-    QSqlQuery query(database());
-    query.prepare("UPDATE users SET must_change_password = :val WHERE id = :id");
-    query.bindValue(":val", value ? 1 : 0);
-    query.bindValue(":id", userId);
-
-    if(!query.exec()){
-        m_lastError = query.lastError().text();
-        return false;
-    }
-
-    return query.numRowsAffected() > 0;
+bool DatabaseService::setMustChangePassword(const QString &userId, bool value) {
+    if (!m_opened) return false;
+    QSqlQuery q(database());
+    q.prepare("UPDATE users SET must_change_password = :v WHERE id = :id");
+    q.bindValue(":id", userId);
+    q.bindValue(":v", value ? 1 : 0);
+    if (!q.exec()) { m_lastError = q.lastError().text(); return false; }
+    return q.numRowsAffected() > 0;
 }
 
 bool DatabaseService::createRule(const Rule &rule) {
     if (!m_opened) return false;
-    QSqlQuery query(database());
-    query.prepare(R"(
-        INSERT INTO rules (
-            id, name, rule_type, match_event_type, secondary_event_type, threshold,
-            window_seconds, cooldown_seconds, alert_severity, alert_title, alert_description, is_enabled
-        ) VALUES (
-            :id, :name, :rule_type, :match_event_type, :secondary_event_type, :threshold,
-            :window_seconds, :cooldown_seconds, :alert_severity, :alert_title, :alert_description, :is_enabled
-        )
+    QSqlQuery q(database());
+    q.prepare(R"(
+        INSERT INTO rules (id, name, rule_type, match_event_type, secondary_event_type, threshold, window_seconds, cooldown_seconds, alert_severity, alert_title, alert_description, is_enabled)
+        VALUES (:id, :name, :rule_type, :match_event_type, :secondary_event_type, :threshold, :window_seconds, :cooldown_seconds, :alert_severity, :alert_title, :alert_description, :is_enabled)
     )");
-
-    query.bindValue(":id", rule.id.isEmpty() ? generateId() : rule.id);
-    query.bindValue(":name", rule.name);
-    query.bindValue(":rule_type", rule.ruleType);
-    query.bindValue(":match_event_type",rule.matchEventType);
-    query.bindValue(":secondary_event_type", rule.secondaryEventType);
-    query.bindValue(":threshold", rule.threshold);
-    query.bindValue(":window_seconds", rule.windowSeconds);
-    query.bindValue(":cooldown_seconds", rule.cooldownSeconds);
-    query.bindValue(":alert_severity", rule.alertSeverity);
-    query.bindValue(":alert_title", rule.alertTitle);
-    query.bindValue(":alert_description", rule.alertDescription);
-    query.bindValue(":is_enabled", rule.isEnabled ? 1 : 0);
-
-    if (!query.exec()) {
-        m_lastError = query.lastError().text();
-        return false;
-    }
+    q.bindValue(":id", rule.id.isEmpty() ? generateId() : rule.id);
+    q.bindValue(":name", rule.name);
+    q.bindValue(":rule_type", rule.ruleType);
+    q.bindValue(":match_event_type", rule.matchEventType);
+    q.bindValue(":secondary_event_type", rule.secondaryEventType);
+    q.bindValue(":threshold", rule.threshold);
+    q.bindValue(":window_seconds", rule.windowSeconds);
+    q.bindValue(":cooldown_seconds", rule.cooldownSeconds);
+    q.bindValue(":alert_severity", rule.alertSeverity);
+    q.bindValue(":alert_title", rule.alertTitle);
+    q.bindValue(":alert_description", rule.alertDescription);
+    q.bindValue(":is_enabled", rule.isEnabled ? 1 : 0);
+    if (!q.exec()) { m_lastError = q.lastError().text(); return false; }
     return true;
 }
 
 bool DatabaseService::updateRule(const Rule &rule) {
     if (!m_opened) return false;
-    QSqlQuery query(database());
-    query.prepare(R"(
+    QSqlQuery q(database());
+    q.prepare(R"(
         UPDATE rules SET
             name = :name,
             rule_type = :rule_type,
@@ -849,272 +508,502 @@ bool DatabaseService::updateRule(const Rule &rule) {
             is_enabled = :is_enabled
         WHERE id = :id
     )");
-
-    query.bindValue(":id", rule.id);
-    query.bindValue(":name", rule.name);
-    query.bindValue(":rule_type", rule.ruleType);
-    query.bindValue(":match_event_type", rule.matchEventType);
-    query.bindValue(":secondary_event_type", rule.secondaryEventType);
-    query.bindValue(":threshold", rule.threshold);
-    query.bindValue(":window_seconds", rule.windowSeconds);
-    query.bindValue(":cooldown_seconds", rule.cooldownSeconds);
-    query.bindValue(":alert_severity", rule.alertSeverity);
-    query.bindValue(":alert_title", rule.alertTitle);
-    query.bindValue(":alert_description", rule.alertDescription);
-    query.bindValue(":is_enabled", rule.isEnabled ? 1 : 0);
-
-    if (!query.exec()) {
-        m_lastError = query.lastError().text();
-        return false;
-    }
-    return query.numRowsAffected() > 0;
+    q.bindValue(":id", rule.id);
+    q.bindValue(":name", rule.name);
+    q.bindValue(":rule_type", rule.ruleType);
+    q.bindValue(":match_event_type", rule.matchEventType);
+    q.bindValue(":secondary_event_type", rule.secondaryEventType);
+    q.bindValue(":threshold", rule.threshold);
+    q.bindValue(":window_seconds", rule.windowSeconds);
+    q.bindValue(":cooldown_seconds", rule.cooldownSeconds);
+    q.bindValue(":alert_severity", rule.alertSeverity);
+    q.bindValue(":alert_title", rule.alertTitle);
+    q.bindValue(":alert_description", rule.alertDescription);
+    q.bindValue(":is_enabled", rule.isEnabled ? 1 : 0);
+    if (!q.exec()) { m_lastError = q.lastError().text(); return false; }
+    return q.numRowsAffected() > 0;
 }
 
 bool DatabaseService::deleteRule(const QString &ruleId) {
     if (!m_opened) return false;
-    QSqlQuery query(database());
-    query.prepare("DELETE FROM rules WHERE id = :id");
-    query.bindValue(":id", ruleId);
-
-    if (!query.exec()) {
-        m_lastError = query.lastError().text();
-        return false;
-    }
-    return query.numRowsAffected() > 0;
+    QSqlQuery q(database());
+    q.prepare("DELETE FROM rules WHERE id = :id");
+    q.bindValue(":id", ruleId);
+    if (!q.exec()) { m_lastError = q.lastError().text(); return false; }
+    return q.numRowsAffected() > 0;
 }
 
-bool DatabaseService::setRuleEnabled(const QString &ruleId, bool enabled){
-    if(!m_opened) return false;
-    QSqlQuery query(database());
-    query.prepare("UPDATE rules SET is_enabled = :val WHERE id = :id");
-    query.bindValue(":val", enabled ? 1 : 0);
-    query.bindValue(":id", ruleId);
-
-    if(!query.exec()){
-        m_lastError = query.lastError().text();
-        return false;
-    }
-
-    return query.numRowsAffected() > 0;
+bool DatabaseService::setRuleEnabled(const QString &ruleId, bool enabled) {
+    if (!m_opened) return false;
+    QSqlQuery q(database());
+    q.prepare("UPDATE rules SET is_enabled = :e WHERE id = :id");
+    q.bindValue(":id", ruleId);
+    q.bindValue(":e", enabled ? 1 : 0);
+    if (!q.exec()) { m_lastError = q.lastError().text(); return false; }
+    return q.numRowsAffected() > 0;
 }
 
 QVector<Rule> DatabaseService::getAllRules() const {
     QVector<Rule> rules;
-    if (!m_opened) return rules;  
+    if (!m_opened) return rules;
 
-    QSqlQuery query(database());
-    if (!query.exec("SELECT * FROM rules ORDER BY name")) return rules;
+    QSqlQuery q(database());
+    if (!q.exec(R"(
+        SELECT id, name, rule_type, match_event_type, secondary_event_type, threshold, window_seconds, cooldown_seconds, alert_severity, alert_title, alert_description, is_enabled
+        FROM rules ORDER BY name
+    )")) return rules;
 
-    while (query.next()) {
+    while (q.next()) {
         Rule r;
-        r.id = query.value("id").toString();
-        r.name = query.value("name").toString();
-        r.ruleType = query.value("rule_type").toString();
-        r.matchEventType = query.value("match_event_type").toString();
-        r.secondaryEventType = query.value("secondary_event_type").toString();
-        r.threshold = query.value("threshold").toInt();
-        r.windowSeconds = query.value("window_seconds").toInt();
-        r.cooldownSeconds = query.value("cooldown_seconds").toInt();
-        r.alertSeverity = query.value("alert_severity").toString();
-        r.alertTitle = query.value("alert_title").toString();
-        r.alertDescription = query.value("alert_description").toString();
-        r.isEnabled = query.value("is_enabled").toInt() == 1;
+        r.id = q.value("id").toString();
+        r.name = q.value("name").toString();
+        r.ruleType = q.value("rule_type").toString();
+        r.matchEventType = q.value("match_event_type").toString();
+        r.secondaryEventType = q.value("secondary_event_type").toString();
+        r.threshold = q.value("threshold").toInt();
+        r.windowSeconds = q.value("window_seconds").toInt();
+        r.cooldownSeconds = q.value("cooldown_seconds").toInt();
+        r.alertSeverity = q.value("alert_severity").toString();
+        r.alertTitle = q.value("alert_title").toString();
+        r.alertDescription = q.value("alert_description").toString();
+        r.isEnabled = q.value("is_enabled").toInt() == 1;
         rules.append(r);
     }
     return rules;
 }
 
-bool DatabaseService::ruleExists(const QString &ruleId) const{
-    if(!m_opened) return false;
-    QSqlQuery query(database());
-    query.prepare("SELECT 1 FROM rules WHERE id = :id LIMIT 1");
-    query.bindValue(":id", ruleId);
-    if(!query.exec()) return false;
-    return query.next();
-}
-
-void DatabaseService::seedDefaultRules() {
-    QSqlQuery check(database());
-    if (check.exec("SELECT COUNT(*) FROM rules") && check.next()) {
-        if (check.value(0).toInt() > 0) return;
-    }
-
-    QVector<Rule> defaults;
-
-    Rule r1;
-    r1.id = "DIRECT_CRITICAL";
-    r1.name = "Direct Critical Event Alert";
-    r1.ruleType = "threshold";
-    r1.matchEventType = "emergency_stop";
-    r1.threshold = 1; r1.windowSeconds = 60; r1.cooldownSeconds = 60;
-    r1.alertSeverity = "critical";
-    r1.alertTitle = "Аварийная остановка";
-    r1.alertDescription = "Зафиксирована аварийная остановка оборудования";
-    defaults.append(r1);
-
-    Rule r2;
-    r2.id = "DIRECT_SAFETY_BYPASS";
-    r2.name = "Safety Bypass Alert";
-    r2.ruleType = "threshold";
-    r2.matchEventType = "safety_bypass";
-    r2.threshold = 1; r2.windowSeconds = 60; r2.cooldownSeconds = 60;
-    r2.alertSeverity = "critical";
-    r2.alertTitle = "Отключение защиты";
-    r2.alertDescription = "Система защитных блокировок отключена без разрешения";
-    defaults.append(r2);
-
-    Rule r3;
-    r3.id = "DIRECT_MALWARE";
-    r3.name = "Malware Detected Alert";
-    r3.ruleType = "threshold";
-    r3.matchEventType = "malware_detected";
-    r3.threshold = 1; r3.windowSeconds = 60; r3.cooldownSeconds = 300;
-    r3.alertSeverity = "critical";
-    r3.alertTitle = "Обнаружена угроза";
-    r3.alertDescription = "На устройстве обнаружено вредоносное программное обеспечение";
-    defaults.append(r3);
-
-
-    Rule r4;
-    r4.id = "DIRECT_BRUTE_FORCE";
-    r4.name = "Brute Force Alert";
-    r4.ruleType = "threshold";
-    r4.matchEventType = "brute_force";
-    r4.threshold = 1; r4.windowSeconds = 60; r4.cooldownSeconds = 120;
-    r4.alertSeverity = "high";
-    r4.alertTitle = "Подбор пароля";
-    r4.alertDescription = "Зафиксирована попытка подбора пароля";
-    defaults.append(r4);
-
-    Rule r5;
-    r5.id = "DIRECT_UNAUTHORIZED";
-    r5.name = "Unauthorized Access Alert";
-    r5.ruleType = "threshold";
-    r5.matchEventType = "unauthorized_access";
-    r5.threshold = 1; r5.windowSeconds = 60; r5.cooldownSeconds = 120;
-    r5.alertSeverity = "high";
-    r5.alertTitle = "Несанкционированный доступ";
-    r5.alertDescription = "Попытка доступа с неизвестного источника";
-    defaults.append(r5);
-
-    Rule r6;
-    r6.id = "DIRECT_PROCESS_ANOMALY";
-    r6.name = "Process Anomaly Alert";
-    r6.ruleType = "threshold";
-    r6.matchEventType = "process_anomaly";
-    r6.threshold = 1; r6.windowSeconds = 60; r6.cooldownSeconds = 120;
-    r6.alertSeverity = "high";
-    r6.alertTitle = "Аномалия процесса";
-    r6.alertDescription = "Показание датчика вышло за допустимый предел";
-    defaults.append(r6);
-
-
-    Rule r7;
-    r7.id = "CORR_SUSPICIOUS_BACKUP";
-    r7.name = "Suspicious Backup After Auth Failure";
-    r7.ruleType = "correlation";
-    r7.matchEventType = "config_backup";
-    r7.secondaryEventType = "auth_failure";
-    r7.threshold = 1; r7.windowSeconds = 300; r7.cooldownSeconds = 300;
-    r7.alertSeverity = "high";
-    r7.alertTitle = "Подозрительное резервное копирование";
-    r7.alertDescription = "Конфигурация скопирована после неудачной авторизации";
-    defaults.append(r7);
-
-    for (const Rule &rule : defaults) {
-        createRule(rule);
-    }
+bool DatabaseService::ruleExists(const QString &ruleId) const {
+    if (!m_opened) return false;
+    QSqlQuery q(database());
+    q.prepare("SELECT 1 FROM rules WHERE id = :id LIMIT 1");
+    q.bindValue(":id", ruleId);
+    if (!q.exec()) return false;
+    return q.next();
 }
 
 bool DatabaseService::clearEvents() {
     if (!m_opened) return false;
-    QSqlQuery query(database());
-    if (!query.exec("DELETE FROM events")) {
-        m_lastError = query.lastError().text();
-        return false;
-    }
+    QSqlQuery q(database());
+    if (!q.exec("DELETE FROM events")) { m_lastError = q.lastError().text(); return false; }
     return true;
 }
 
 bool DatabaseService::clearAlerts() {
     if (!m_opened) return false;
-    QSqlQuery query(database());
-    if (!query.exec("DELETE FROM alerts")) {
-        m_lastError = query.lastError().text();
-        return false;
-    }
+    QSqlQuery q(database());
+    if (!q.exec("DELETE FROM alerts")) { m_lastError = q.lastError().text(); return false; }
     return true;
 }
 
-bool DatabaseService::saveEventForCorrelation(const QString &deviceName,
-                                              const QString &eventType,
-                                              const QDateTime &timestamp) {
+bool DatabaseService::createEvent(const Event &event) {
     if (!m_opened) return false;
-
-    QSqlQuery query(database());
-    query.prepare(R"(
-        INSERT OR IGNORE INTO correlation_history 
-        (id, device_name, event_type, timestamp, created_at)
-        VALUES (:id, :device_name, :event_type, :timestamp, :created_at)
+    QSqlQuery q(database());
+    q.prepare(R"(
+        INSERT INTO events (id, device_name, event_type, action, severity, timestamp, raw_log, location)
+        VALUES (:id, :device_name, :event_type, :action, :severity, :timestamp, :raw_log, :location)
     )");
+    q.bindValue(":id", event.id.isEmpty() ? generateId() : event.id);
+    q.bindValue(":device_name", event.deviceName);
+    q.bindValue(":event_type", event.eventType);
+    q.bindValue(":action", event.action);
+    q.bindValue(":severity", event.severity);
+    q.bindValue(":timestamp", event.timestamp.isValid() ? event.timestamp.toString(Qt::ISODate) : QDateTime::currentDateTime().toString(Qt::ISODate));
+    q.bindValue(":raw_log", event.rawLog);
+    q.bindValue(":location", event.location);
+    if (!q.exec()) { m_lastError = q.lastError().text(); return false; }
+    return true;
+}
 
-    query.bindValue(":id", generateId());
-    query.bindValue(":device_name", deviceName);
-    query.bindValue(":event_type", eventType);
-    query.bindValue(":timestamp", timestamp.toString(Qt::ISODate));
-    query.bindValue(":created_at", QDateTime::currentDateTime().toString(Qt::ISODate));
+QVector<Event> DatabaseService::getRecentEvents(int limit, int offset) const {
+    QVector<Event> events;
+    if (!m_opened) return events;
 
-    return query.exec();
+    QSqlQuery q(database());
+    q.prepare(R"(
+        SELECT id, device_name, event_type, action, severity, timestamp, raw_log, location
+        FROM events
+        ORDER BY timestamp DESC
+        LIMIT :limit OFFSET :offset
+    )");
+    q.bindValue(":limit", limit);
+    q.bindValue(":offset", offset);
+    if (!q.exec()) return events;
+
+    while (q.next()) {
+        Event e;
+        e.id = q.value("id").toString();
+        e.deviceName = q.value("device_name").toString();
+        e.eventType = q.value("event_type").toString();
+        e.action = q.value("action").toString();
+        e.severity = q.value("severity").toString();
+        e.timestamp = QDateTime::fromString(q.value("timestamp").toString(), Qt::ISODate);
+        e.rawLog = q.value("raw_log").toString();
+        e.location = q.value("location").toString();
+        events.append(e);
+    }
+    return events;
+}
+
+QVector<Event> DatabaseService::getEventsPaged(int limit, const QString &lastId, const QDateTime &lastTimestamp) const {
+    QVector<Event> events;
+    if (!m_opened) return events;
+
+    QSqlQuery q(database());
+    if (lastId.isEmpty() || !lastTimestamp.isValid()) {
+        q.prepare(R"(
+            SELECT id, device_name, event_type, action, severity, timestamp, raw_log, location
+            FROM events
+            ORDER BY timestamp DESC, id DESC
+            LIMIT :limit
+        )");
+        q.bindValue(":limit", limit);
+    } else {
+        q.prepare(R"(
+            SELECT id, device_name, event_type, action, severity, timestamp, raw_log, location
+            FROM events
+            WHERE timestamp < :lastTimestamp
+               OR (timestamp = :lastTimestamp AND id < :lastId)
+            ORDER BY timestamp DESC, id DESC
+            LIMIT :limit
+        )");
+        q.bindValue(":lastTimestamp", lastTimestamp.toString(Qt::ISODate));
+        q.bindValue(":lastId", lastId);
+        q.bindValue(":limit", limit);
+    }
+
+    if (!q.exec()) return events;
+    while (q.next()) {
+        Event e;
+        e.id = q.value("id").toString();
+        e.deviceName = q.value("device_name").toString();
+        e.eventType = q.value("event_type").toString();
+        e.action = q.value("action").toString();
+        e.severity = q.value("severity").toString();
+        e.timestamp = QDateTime::fromString(q.value("timestamp").toString(), Qt::ISODate);
+        e.rawLog = q.value("raw_log").toString();
+        e.location = q.value("location").toString();
+        events.append(e);
+    }
+    return events;
+}
+
+QVector<Event> DatabaseService::getEventsByDateRange(const QDateTime &from, const QDateTime &to) const {
+    QVector<Event> events;
+    if (!m_opened) return events;
+
+    QSqlQuery q(database());
+    q.prepare(R"(
+        SELECT id, device_name, event_type, action, severity, timestamp, raw_log, location
+        FROM events
+        WHERE timestamp >= :from AND timestamp <= :to
+        ORDER BY timestamp DESC
+    )");
+    q.bindValue(":from", from.toString(Qt::ISODate));
+    q.bindValue(":to", to.toString(Qt::ISODate));
+    if (!q.exec()) return events;
+
+    while (q.next()) {
+        Event e;
+        e.id = q.value("id").toString();
+        e.deviceName = q.value("device_name").toString();
+        e.eventType = q.value("event_type").toString();
+        e.action = q.value("action").toString();
+        e.severity = q.value("severity").toString();
+        e.timestamp = QDateTime::fromString(q.value("timestamp").toString(), Qt::ISODate);
+        e.rawLog = q.value("raw_log").toString();
+        e.location = q.value("location").toString();
+        events.append(e);
+    }
+    return events;
+}
+
+int DatabaseService::getTotalEventsCount() const {
+    if (!m_opened) return 0;
+    QSqlQuery q(database());
+    if (!q.exec("SELECT COUNT(*) FROM events")) return 0;
+    return q.next() ? q.value(0).toInt() : 0;
+}
+
+bool DatabaseService::createAlert(const Alert &alert) {
+    if (!m_opened) return false;
+    QSqlQuery q(database());
+    q.prepare(R"(
+        INSERT INTO alerts (id, title, description, severity, status, device_name, triggered_at, rule_id, assigned_to, comment, related_event_ids)
+        VALUES (:id, :title, :description, :severity, :status, :device_name, :triggered_at, :rule_id, :assigned_to, :comment, :related_event_ids)
+    )");
+    q.bindValue(":id", alert.id.isEmpty() ? generateId() : alert.id);
+    q.bindValue(":title", alert.title);
+    q.bindValue(":description", alert.description);
+    q.bindValue(":severity", alert.severity);
+    q.bindValue(":status", alert.status);
+    q.bindValue(":device_name", alert.deviceName);
+    q.bindValue(":triggered_at", alert.triggeredAt.isValid() ? alert.triggeredAt.toString(Qt::ISODate) : QDateTime::currentDateTime().toString(Qt::ISODate));
+    q.bindValue(":rule_id", alert.ruleId);
+    q.bindValue(":assigned_to", alert.assignedTo);
+    q.bindValue(":comment", alert.comment);
+    q.bindValue(":related_event_ids", alert.relatedEventIds.join(","));
+    if (!q.exec()) { m_lastError = q.lastError().text(); return false; }
+    return true;
+}
+
+bool DatabaseService::updateAlert(const Alert &alert) {
+    if (!m_opened) return false;
+    QSqlQuery q(database());
+    q.prepare(R"(
+        UPDATE alerts SET
+            title = :title,
+            description = :description,
+            severity = :severity,
+            status = :status,
+            device_name = :device_name,
+            triggered_at = :triggered_at,
+            rule_id = :rule_id,
+            assigned_to = :assigned_to,
+            comment = :comment,
+            related_event_ids = :related_event_ids
+        WHERE id = :id
+    )");
+    q.bindValue(":id", alert.id);
+    q.bindValue(":title", alert.title);
+    q.bindValue(":description", alert.description);
+    q.bindValue(":severity", alert.severity);
+    q.bindValue(":status", alert.status);
+    q.bindValue(":device_name", alert.deviceName);
+    q.bindValue(":triggered_at", alert.triggeredAt.isValid() ? alert.triggeredAt.toString(Qt::ISODate) : QDateTime::currentDateTime().toString(Qt::ISODate));
+    q.bindValue(":rule_id", alert.ruleId);
+    q.bindValue(":assigned_to", alert.assignedTo);
+    q.bindValue(":comment", alert.comment);
+    q.bindValue(":related_event_ids", alert.relatedEventIds.join(","));
+    if (!q.exec()) { m_lastError = q.lastError().text(); return false; }
+    return q.numRowsAffected() > 0;
+}
+
+QVector<Alert> DatabaseService::getActiveAlerts() const {
+    QVector<Alert> alerts;
+    if (!m_opened) return alerts;
+
+    QSqlQuery q(database());
+    if (!q.exec(R"(
+        SELECT id, title, description, severity, status, device_name, triggered_at, rule_id, assigned_to, comment, related_event_ids
+        FROM alerts
+        WHERE status = 'open'
+        ORDER BY triggered_at DESC
+    )")) return alerts;
+
+    while (q.next()) {
+        Alert a;
+        a.id = q.value("id").toString();
+        a.title = q.value("title").toString();
+        a.description = q.value("description").toString();
+        a.severity = q.value("severity").toString();
+        a.status = q.value("status").toString();
+        a.deviceName = q.value("device_name").toString();
+        a.triggeredAt = QDateTime::fromString(q.value("triggered_at").toString(), Qt::ISODate);
+        a.ruleId = q.value("rule_id").toString();
+        a.assignedTo = q.value("assigned_to").toString();
+        a.comment = q.value("comment").toString();
+        a.relatedEventIds = q.value("related_event_ids").toString().split(",", Qt::SkipEmptyParts);
+        alerts.append(a);
+    }
+    return alerts;
+}
+
+QVector<Alert> DatabaseService::getAllAlerts() const {
+    QVector<Alert> alerts;
+    if (!m_opened) return alerts;
+
+    QSqlQuery q(database());
+    if (!q.exec(R"(
+        SELECT id, title, description, severity, status, device_name, triggered_at, rule_id, assigned_to, comment, related_event_ids
+        FROM alerts
+        ORDER BY triggered_at DESC
+    )")) return alerts;
+
+    while (q.next()) {
+        Alert a;
+        a.id = q.value("id").toString();
+        a.title = q.value("title").toString();
+        a.description = q.value("description").toString();
+        a.severity = q.value("severity").toString();
+        a.status = q.value("status").toString();
+        a.deviceName = q.value("device_name").toString();
+        a.triggeredAt = QDateTime::fromString(q.value("triggered_at").toString(), Qt::ISODate);
+        a.ruleId = q.value("rule_id").toString();
+        a.assignedTo = q.value("assigned_to").toString();
+        a.comment = q.value("comment").toString();
+        a.relatedEventIds = q.value("related_event_ids").toString().split(",", Qt::SkipEmptyParts);
+        alerts.append(a);
+    }
+    return alerts;
+}
+
+int DatabaseService::getAlertCountBySeverity(const QString &severity) const {
+    if (!m_opened) return 0;
+    QSqlQuery q(database());
+    q.prepare("SELECT COUNT(*) FROM alerts WHERE severity = :s");
+    q.bindValue(":s", severity);
+    if (!q.exec()) return 0;
+    return q.next() ? q.value(0).toInt() : 0;
+}
+
+int DatabaseService::getAlertCountByStatus(const QString &status) const {
+    if (!m_opened) return 0;
+    QSqlQuery q(database());
+    q.prepare("SELECT COUNT(*) FROM alerts WHERE status = :s");
+    q.bindValue(":s", status);
+    if (!q.exec()) return 0;
+    return q.next() ? q.value(0).toInt() : 0;
+}
+
+int DatabaseService::getAlertCount() const {
+    if (!m_opened) return 0;
+    QSqlQuery q(database());
+    if (!q.exec("SELECT COUNT(*) FROM alerts")) return 0;
+    return q.next() ? q.value(0).toInt() : 0;
+}
+
+int DatabaseService::getEventCountBySeverity(const QString &severity) const {
+    if (!m_opened) return 0;
+    QSqlQuery q(database());
+    q.prepare("SELECT COUNT(*) FROM events WHERE severity = :s");
+    q.bindValue(":s", severity);
+    if (!q.exec()) return 0;
+    return q.next() ? q.value(0).toInt() : 0;
+}
+
+QVariantList DatabaseService::getTopDevices(int limit) const {
+    QVariantList out;
+    if (!m_opened) return out;
+    QSqlQuery q(database());
+    q.prepare(R"(
+        SELECT device_name, COUNT(*) AS count
+        FROM events
+        GROUP BY device_name
+        ORDER BY count DESC
+        LIMIT :limit
+    )");
+    q.bindValue(":limit", limit);
+    if (!q.exec()) return out;
+    while (q.next()) {
+        QVariantMap m;
+        m["name"] = q.value("device_name").toString();
+        m["count"] = q.value("count").toInt();
+        out.append(m);
+    }
+    return out;
+}
+
+QVariantList DatabaseService::getActivityLast7Hours() const {
+    QVariantList out;
+    if (!m_opened) return out;
+
+    const QDateTime nowLocal = QDateTime::currentDateTime();
+    const QDateTime nowUtc = nowLocal.toUTC();
+
+    for (int i = 6; i >= 0; --i) {
+        const QDateTime fromUtc = nowUtc.addSecs(-i * 3600);
+        const QDateTime toUtc = fromUtc.addSecs(3599);
+
+        QSqlQuery q(database());
+        q.prepare(R"(
+            SELECT COUNT(*)
+            FROM events
+            WHERE timestamp >= :from AND timestamp <= :to
+        )");
+        q.bindValue(":from", fromUtc.toString(Qt::ISODate));
+        q.bindValue(":to", toUtc.toString(Qt::ISODate));
+
+        int count = 0;
+        if (q.exec() && q.next()) count = q.value(0).toInt();
+
+        QVariantMap m;
+        m["hour"] = fromUtc.toLocalTime().toString("hh:00");
+        m["count"] = count;
+        out.append(m);
+    }
+
+    return out;
+}
+
+int DatabaseService::getEventCount() const {
+    return getTotalEventsCount();
+}
+
+bool DatabaseService::saveEventForCorrelation(const QString &deviceName, const QString &eventType, const QDateTime &timestamp) {
+    if (!m_opened) return false;
+    QSqlQuery q(database());
+    q.prepare(R"(
+        INSERT INTO correlation_history (id, device_name, event_type, created_at)
+        VALUES (:id, :device_name, :event_type, :created_at)
+    )");
+    q.bindValue(":id", generateId());
+    q.bindValue(":device_name", deviceName);
+    q.bindValue(":event_type", eventType);
+    q.bindValue(":created_at", timestamp.isValid() ? timestamp.toUTC().toString(Qt::ISODate) : QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+    if (!q.exec()) { m_lastError = q.lastError().text(); return false; }
+    return true;
 }
 
 QVector<EventRecord> DatabaseService::loadRecentHistory(int maxEvents) const {
-    QVector<EventRecord> history;
-    if (!m_opened) return history;
-
-    QSqlQuery query(database());
-    query.prepare(R"(
-        SELECT device_name, event_type, timestamp
+    QVector<EventRecord> out;
+    if (!m_opened) return out;
+    QSqlQuery q(database());
+    q.prepare(R"(
+        SELECT device_name, event_type, created_at
         FROM correlation_history
-        ORDER BY timestamp DESC
-        LIMIT :max_events
+        ORDER BY created_at DESC
+        LIMIT :limit
     )");
-    query.bindValue(":max_events", maxEvents);
-
-    if (!query.exec()) return history;
-
-    while (query.next()) {
-        EventRecord rec;
-        rec.deviceName = query.value("device_name").toString();
-        rec.eventType  = query.value("event_type").toString();
-        rec.timestamp  = QDateTime::fromString(
-                            query.value("timestamp").toString(), Qt::ISODate);
-        history.append(rec);
+    q.bindValue(":limit", maxEvents);
+    if (!q.exec()) return out;
+    while (q.next()) {
+        EventRecord r;
+        r.deviceName = q.value("device_name").toString();
+        r.eventType = q.value("event_type").toString();
+        r.timestamp = QDateTime::fromString(q.value("created_at").toString(), Qt::ISODate);
+        out.append(r);
     }
-    return history;
+    return out;
 }
 
 bool DatabaseService::clearCorrelationHistory() {
     if (!m_opened) return false;
-    QSqlQuery query(database());
-    return query.exec("DELETE FROM correlation_history");
+    QSqlQuery q(database());
+    if (!q.exec("DELETE FROM correlation_history")) { m_lastError = q.lastError().text(); return false; }
+    return true;
 }
 
 bool DatabaseService::pruneCorrelationHistory(int olderThanSeconds) {
     if (!m_opened) return false;
-    QSqlQuery query(database());
-    query.prepare(R"(
-        DELETE FROM correlation_history
-        WHERE timestamp < datetime('now', :offset)
-    )");
-    query.bindValue(":offset", QString("-%1 seconds").arg(olderThanSeconds));
-    return query.exec();
+    QDateTime cutoff = QDateTime::currentDateTimeUtc().addSecs(-olderThanSeconds);
+    QSqlQuery q(database());
+    q.prepare("DELETE FROM correlation_history WHERE created_at < :cutoff");
+    q.bindValue(":cutoff", cutoff.toString(Qt::ISODate));
+    if (!q.exec()) { m_lastError = q.lastError().text(); return false; }
+    return true;
 }
 
-bool DatabaseService::openWithPath(const QString &path) {
-    m_dbPath = path;
-    return open();
-}
+bool DatabaseService::updateAlertStatus(const QString &alertId, const QString &newStatus) {
+    QSqlDatabase db = database();
+    if (!db.isOpen()) {
+        m_lastError = "Database is not open";
+        return false;
+    }
 
-QString DatabaseService::lastError() const {
-    return m_lastError;
+    QSqlQuery q(db);
+    q.prepare("UPDATE alerts SET status = :status WHERE id = :id");
+    q.bindValue(":status", newStatus);
+    q.bindValue(":id", alertId);
+
+    if (!q.exec()) {
+        m_lastError = q.lastError().text();
+        return false;
+    }
+
+    if (q.numRowsAffected() <= 0) {
+        m_lastError = "Alert not found";
+        return false;
+    }
+
+    return true;
 }

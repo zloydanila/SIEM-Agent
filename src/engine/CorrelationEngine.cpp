@@ -5,16 +5,22 @@
 
 CorrelationEngine::CorrelationEngine(DatabaseService *db, QObject *parent)
     : QObject(parent), m_db(db) {
-    reloadRules();
-
-    auto persistentHistory = m_db->loadRecentHistory(2000);
-    for (const auto& rec : persistentHistory) {
-        m_history[rec.deviceName].append(rec);
+    if (m_db) {
+        m_db->seedDefaultRules();
+        reloadRules();
+        auto persistentHistory = m_db->loadRecentHistory(2000);
+        for (const auto& rec : persistentHistory) {
+            m_history[rec.deviceName].append(rec);
+        }
+        qDebug() << "[CorrelationEngine] Restored" << persistentHistory.size() << "events from DB history";
     }
-    qDebug() << "[CorrelationEngine] Restored" << persistentHistory.size() << "events from DB history";
 }
 
 void CorrelationEngine::reloadRules() {
+    if (!m_db) {
+        m_rules.clear();
+        return;
+    }
     m_rules = m_db->getAllRules().toList();
     qDebug() << "[CorrelationEngine] Loaded" << m_rules.size() << "rules from DB";
 }
@@ -24,15 +30,16 @@ void CorrelationEngine::addRule(const Rule &rule) {
 }
 
 void CorrelationEngine::analyze(const Event &event) {
+    if (!m_db) return;
+
     EventRecord record;
     record.deviceName = event.deviceName;
-    record.eventType  = event.eventType;
+    record.eventType = event.eventType;
     record.timestamp = event.timestamp.isValid()
                     ? event.timestamp.toUTC()
-                    : QDateTime::currentDateTimeUtc(); 
+                    : QDateTime::currentDateTimeUtc();
 
     m_history[event.deviceName].append(record);
-
     m_db->saveEventForCorrelation(event.deviceName, event.eventType, record.timestamp);
 
     if (m_history[event.deviceName].size() > 2000) {
@@ -41,7 +48,6 @@ void CorrelationEngine::analyze(const Event &event) {
 
     for (const Rule &rule : m_rules) {
         if (!rule.isEnabled) continue;
-
         if (rule.ruleType == "threshold") {
             analyzeThreshold(rule, event, record);
         } else if (rule.ruleType == "correlation") {
@@ -58,11 +64,11 @@ void CorrelationEngine::analyzeThreshold(const Rule &rule, const Event &event, c
     int count = countMatches(event.deviceName, rule.matchEventType, rule.windowSeconds);
 
     if (count >= rule.threshold) {
-        if (!isOnCooldown(rule.id, event.deviceName)) { 
+        if (!isOnCooldown(rule.id, event.deviceName)) {
             Alert alert = buildAlert(rule, event.deviceName, event);
             if (m_db->createAlert(alert)) {
                 qDebug() << "[CorrelationEngine] Alert fired:" << rule.name << "on" << event.deviceName;
-                setCooldown(rule.id, event.deviceName, rule.cooldownSeconds); 
+                setCooldown(rule.id, event.deviceName, rule.cooldownSeconds);
                 emit alertCreated();
             }
         }
@@ -73,16 +79,14 @@ void CorrelationEngine::analyzeCorrelation(const Rule &rule, const Event &event)
     if (event.eventType != rule.matchEventType) return;
 
     pruneHistory(event.deviceName, rule.windowSeconds);
-
     int contextCount = countMatches(event.deviceName, rule.secondaryEventType, rule.windowSeconds);
 
     if (contextCount >= rule.threshold) {
-        if (!isOnCooldown(rule.id, event.deviceName)) { 
+        if (!isOnCooldown(rule.id, event.deviceName)) {
             Alert alert = buildAlert(rule, event.deviceName, event);
             if (m_db->createAlert(alert)) {
-                qDebug() << "[CorrelationEngine] Correlation alert fired:"
-                         << rule.name << "on" << event.deviceName;
-                setCooldown(rule.id, event.deviceName, rule.cooldownSeconds);  
+                qDebug() << "[CorrelationEngine] Correlation alert fired:" << rule.name << "on" << event.deviceName;
+                setCooldown(rule.id, event.deviceName, rule.cooldownSeconds);
                 emit alertCreated();
             }
         }
@@ -91,7 +95,7 @@ void CorrelationEngine::analyzeCorrelation(const Rule &rule, const Event &event)
 
 void CorrelationEngine::pruneHistory(const QString &deviceName, int windowSeconds) {
     if (!m_history.contains(deviceName)) return;
-    
+
     QDateTime cutoff = QDateTime::currentDateTimeUtc().addSecs(-windowSeconds);
     QList<EventRecord> &records = m_history[deviceName];
 
@@ -102,10 +106,10 @@ void CorrelationEngine::pruneHistory(const QString &deviceName, int windowSecond
 
 int CorrelationEngine::countMatches(const QString &deviceName, const QString &eventType, int windowSeconds) {
     if (!m_history.contains(deviceName)) return 0;
-    
+
     QDateTime cutoff = QDateTime::currentDateTimeUtc().addSecs(-windowSeconds);
     int count = 0;
-    
+
     for (const EventRecord &r : m_history[deviceName]) {
         if (r.eventType == eventType && r.timestamp >= cutoff) {
             count++;
@@ -126,22 +130,23 @@ void CorrelationEngine::setCooldown(const QString &ruleId, const QString &device
 
 Alert CorrelationEngine::buildAlert(const Rule &rule, const QString &deviceName, const Event &triggerEvent) {
     Alert alert;
-    alert.id          = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    alert.title       = rule.alertTitle;
+    alert.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    alert.title = rule.alertTitle;
     alert.description = rule.alertDescription
                         + "\nУстройство: " + deviceName
                         + "\nСобытие-триггер: " + triggerEvent.eventType;
-    alert.severity    = rule.alertSeverity;
-    alert.status      = "open";
-    alert.deviceName  = deviceName;
+    alert.severity = rule.alertSeverity;
+    alert.status = "open";
+    alert.deviceName = deviceName;
     alert.triggeredAt = QDateTime::currentDateTimeUtc();
-    alert.ruleId      = rule.id;
-    alert.assignedTo  = "";
-    alert.comment     = "Авто-создан движком корреляции";
+    alert.ruleId = rule.id;
+    alert.assignedTo = "";
+    alert.comment = "Авто-создан движком корреляции";
     return alert;
 }
 
 void CorrelationEngine::globalCleanup() {
+    if (!m_db) return;
 
     for (auto it = m_history.begin(); it != m_history.end(); ) {
         pruneHistory(it.key(), 3600);
@@ -159,6 +164,5 @@ void CorrelationEngine::globalCleanup() {
     }
 
     m_db->pruneCorrelationHistory(24 * 3600);
-
     qDebug() << "[CorrelationEngine] Global cleanup completed";
 }

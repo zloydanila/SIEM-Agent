@@ -1,0 +1,241 @@
+.dashboard-page {
+  padding: 0;
+}
+
+.dashboard-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* Bar chart */
+.db-bar-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 140px;
+  padding: 10px 0;
+}
+
+.db-bar-item {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+}
+
+.db-bar-wrap {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  position: relative;
+}
+
+.db-bar-fill {
+  width: 100%;
+  max-width: 28px;
+  min-height: 2px;
+  border-radius: 4px 4px 0 0;
+  background: var(--accent);
+  transition: height var(--anim-normal) ease, opacity var(--anim-fast) ease;
+  position: relative;
+}
+
+.db-bar-fill:hover {
+  opacity: 0.7;
+}
+
+.db-bar-tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  padding: 4px 8px;
+  font-size: var(--font-xs);
+  color: var(--text-primary);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--anim-fast) ease;
+}
+
+.db-bar-wrap:hover .db-bar-tooltip {
+  opacity: 1;
+}
+
+.db-bar-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+}
+
+/* Severity donut */
+.severity-wrap {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.severity-legend {
+  flex: 1;
+  min-width: 140px;
+}
+
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-xs);
+  margin-bottom: 6px;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.legend-label {
+  color: var(--text-muted);
+}
+
+.legend-value {
+  margin-left: auto;
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+/* Device rows */
+.device-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.device-name {
+  font-size: var(--font-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* Users table specific */
+.users-table .col-avatar {
+  width: 40px;
+}
+
+.users-table .col-username {
+  width: 160px;
+}
+
+.users-table .col-fullname {
+  flex: 1;
+}
+
+.users-table .col-email {
+  width: 200px;
+}
+
+.users-table .col-role {
+  width: 110px;
+}
+
+.users-table .col-status {
+  width: 90px;
+}
+
+.users-table .col-actions {
+  width: 130px;
+}
+
+/* Role avatar in table */
+.role-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-small);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-sm);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.role-avatar.admin {
+  background: rgba(248, 81, 73, 0.15);
+  color: var(--role-admin);
+}
+
+.role-avatar.operator {
+  background: rgba(210, 153, 34, 0.15);
+  color: var(--role-operator);
+}
+
+.role-avatar.viewer {
+  background: rgba(88, 166, 255, 0.15);
+  color: var(--role-viewer);
+}
+
+/* Online pill */
+.online-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: var(--radius-full);
+  font-size: var(--font-xs);
+  font-weight: 700;
+  border: 1px solid transparent;
+}
+
+.online-pill.online {
+  color: var(--success);
+  background: rgba(63, 185, 80, 0.12);
+  border-color: rgba(63, 185, 80, 0.25);
+}
+
+.online-pill.offline {
+  color: var(--danger);
+  background: rgba(248, 81, 73, 0.12);
+  border-color: rgba(248, 81, 73, 0.25);
+}
+
+/* Section shell */
+.section-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.9fr);
+  gap: var(--gap);
+  align-items: start;
+}
+
+@media (max-width: 1200px) {
+  .section-shell { grid-template-columns: 1fr; }
+  .grid-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 800px) {
+  .grid-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .page { padding: 14px; }
+}
+
+@media (max-width: 640px) {
+  .grid-kpis { grid-template-columns: 1fr; }
+}

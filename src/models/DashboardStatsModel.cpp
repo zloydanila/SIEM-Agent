@@ -22,8 +22,6 @@ void DashboardStatsModel::updateCounts() {
     m_totalEvents = m_db->getTotalEventsCount();
     m_totalAlerts = m_db->getAlertCount();
     m_openAlerts = m_db->getAlertCountByStatus("open");
-
-    
 }
 
 void DashboardStatsModel::updateTopDevices() {
@@ -36,8 +34,8 @@ void DashboardStatsModel::updateActivity() {
     m_activityData.clear();
     for (const QVariant &item : raw) {
         QVariantMap map = item.toMap();
-        m_activityLabels.append(map["hour"].toString());
-        m_activityData.append(map["count"].toInt());
+        m_activityLabels.append(map.value("hour").toString());
+        m_activityData.append(map.value("count").toInt());
     }
 }
 

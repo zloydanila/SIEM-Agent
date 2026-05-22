@@ -22,6 +22,13 @@ bool AuthManager::currentUserIsAdmin() const {
     return m_currentUser && m_currentUser->role == "admin";
 }
 
+void AuthManager::setPasswordChangeRequired(bool required) {
+    if (m_passwordChangeRequired == required) return;
+    m_passwordChangeRequired = required;
+    emit passwordChangeRequiredChanged();
+    if (required) emit passwordChangeRequired();
+}
+
 void AuthManager::login(const QString &username, const QString &password) {
     if (!m_db) {
         emit loginFailed("Database is not initialized");
@@ -53,19 +60,16 @@ void AuthManager::login(const QString &username, const QString &password) {
     m_isAuthenticated = true;
     m_currentUser = new User(user);
 
+    setPasswordChangeRequired(user.mustChangePassword);
 
     emit loginSuccess(user.username, user.role, user.fullName, user.email);
-
-    if(user.mustChangePassword){
-        emit passwordChangeRequired();
-    }
-
     emit authenticatedChanged();
     emit userChanged();
 }
 
 void AuthManager::logout() {
     m_isAuthenticated = false;
+    setPasswordChangeRequired(false);
 
     if (m_currentUser) {
         delete m_currentUser;
@@ -77,18 +81,19 @@ void AuthManager::logout() {
     emit userChanged();
 }
 
-void AuthManager::registerUser(const QString &username, const QString &password, const QString &role, const QString &fullName, const QString &email){
-    if(!m_db){
+void AuthManager::registerUser(const QString &username, const QString &password, const QString &role,
+                               const QString &fullName, const QString &email) {
+    if (!m_db) {
         emit registrationFailed("Database is not initialized");
         return;
     }
-    
-    if(!currentUserIsAdmin()){
+
+    if (!currentUserIsAdmin()) {
         emit registrationFailed("Только администратор может создать пользователя");
         return;
     }
-    
-    if(m_db -> userExists(username)){
+
+    if (m_db->userExists(username)) {
         emit registrationFailed("Пользователь с таким логином уже существует");
         return;
     }
@@ -105,35 +110,35 @@ void AuthManager::registerUser(const QString &username, const QString &password,
 
     QString salt = QUuid::createUuid().toString(QUuid::WithoutBraces);
     newUser.setPassword(password, salt);
-    
-    if(!m_db -> createUser(newUser)){
-        emit registrationFailed("Failed to create user: " + m_db -> lastError());
+
+    if (!m_db->createUser(newUser)) {
+        emit registrationFailed("Failed to create user: " + m_db->lastError());
         return;
     }
 
     emit userRegistered(username);
 }
 
-void AuthManager::updateUser(const QString &userId, const QString &username, const QString &fullName,const  QString &role, const QString &email, bool isActive){
-
-    if(!m_db){
-        emit registrationFailed("Database is not initialized");
+void AuthManager::updateUser(const QString &userId, const QString &username, const QString &fullName,
+                             const QString &role, const QString &email, bool isActive) {
+    if (!m_db) {
+        emit updateFailed("Database is not initialized");
         return;
     }
 
-    if(!currentUserIsAdmin()){
+    if (!currentUserIsAdmin()) {
         emit updateFailed("current user is not Admin");
         return;
     }
 
-    User userToUpdate = m_db -> findUserById(userId);
+    User userToUpdate = m_db->findUserById(userId);
 
-    if(userToUpdate.id.isEmpty()){
+    if (userToUpdate.id.isEmpty()) {
         emit updateFailed("User not found");
         return;
     }
 
-    if(userToUpdate.username != username && m_db -> userExists(username)){
+    if (userToUpdate.username != username && m_db->userExists(username)) {
         emit updateFailed("Username already in use");
         return;
     }
@@ -144,50 +149,54 @@ void AuthManager::updateUser(const QString &userId, const QString &username, con
     userToUpdate.email = email;
     userToUpdate.isActive = isActive;
 
-    if(!m_db -> updateUser(userToUpdate)){
-        emit updateFailed("Failed to update user: " + m_db -> lastError());
+    if (!m_db->updateUser(userToUpdate)) {
+        emit updateFailed("Failed to update user: " + m_db->lastError());
         return;
     }
 
     emit userUpdated(userId);
 }
 
-void AuthManager::deleteUser(const QString &userId){
-    if(!m_db){
+void AuthManager::deleteUser(const QString &userId) {
+    if (!m_db) {
         emit deletionFailed("Database is not initialized");
         return;
     }
 
-    if(!currentUserIsAdmin()){
+    if (!currentUserIsAdmin()) {
         emit deletionFailed("current user is not admin");
         return;
     }
 
-    User userToDelete = m_db -> findUserById(userId);
+    User userToDelete = m_db->findUserById(userId);
 
-    if(userToDelete.id.isEmpty()){
+    if (userToDelete.id.isEmpty()) {
         emit deletionFailed("User not found");
         return;
     }
 
-    if(m_currentUser == nullptr || userToDelete.id == m_currentUser -> id){
+    if (m_currentUser == nullptr || userToDelete.id == m_currentUser->id) {
         emit deletionFailed("can't delete yourself");
         return;
     }
 
-    if(!m_db -> deleteUser(userId)){
-        emit deletionFailed("Failed to deleted user: " + m_db -> lastError());
+    if (!m_db->deleteUser(userId)) {
+        emit deletionFailed("Failed to deleted user: " + m_db->lastError());
         return;
     }
 
     emit userDeleted(userId);
-
 }
 
 bool AuthManager::changePassword(const QString &currentPassword, const QString &newPassword) {
-    if (!m_currentUser) return false;
+    if (!m_currentUser || !m_db) return false;
 
     User user = m_db->findUserById(m_currentUser->id);
+
+    if (user.id.isEmpty()) {
+        emit errorOccured("Пользователь не найден");
+        return false;
+    }
 
     if (!user.checkPassword(currentPassword)) {
         emit errorOccured("Текущий пароль введён неверно");
@@ -215,6 +224,7 @@ bool AuthManager::changePassword(const QString &currentPassword, const QString &
 
     delete m_currentUser;
     m_currentUser = new User(user);
+    setPasswordChangeRequired(false);
 
     emit passwordChanged();
     return true;

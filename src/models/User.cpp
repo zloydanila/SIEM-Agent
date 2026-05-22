@@ -1,39 +1,42 @@
 #include "User.h"
-#include <QPasswordDigestor>
 #include <QCryptographicHash>
+#include <QPasswordDigestor>
 
-User::User()
-    : isActive(true), mustChangePassword(false){
-}
+static constexpr int PBKDF2_ITERATIONS = 100000;
+static constexpr int PBKDF2_DKLEN = 32;
 
-
-void User::setPassword(const QString &password, const QString &salt){
-    QByteArray hash = QPasswordDigestor::deriveKeyPbkdf2(
-        QCryptographicHash::Sha256,password.toUtf8(), salt.toUtf8(),100000,  32
-    );
-    passwordHash = hash.toHex();
-    this->salt = salt;
-}
-
-bool User::checkPassword(const QString &password) const {
-    if (passwordHash.isEmpty() || salt.isEmpty()) return false;
-
-    QByteArray hash = QPasswordDigestor::deriveKeyPbkdf2(
+void User::setPassword(const QString &password, const QString &newSalt)
+{
+    salt = newSalt;
+    const QByteArray key = QPasswordDigestor::deriveKeyPbkdf2(
         QCryptographicHash::Sha256,
         password.toUtf8(),
         salt.toUtf8(),
-        100000,
-        32
+        PBKDF2_ITERATIONS,
+        PBKDF2_DKLEN
     );
-    return hash.toHex() == passwordHash;
+    passwordHash = key.toHex();
 }
 
-QJsonObject User::toJson() const {
+bool User::checkPassword(const QString &password) const
+{
+    if (salt.isEmpty() || passwordHash.isEmpty()) return false;
+
+    const QByteArray key = QPasswordDigestor::deriveKeyPbkdf2(
+        QCryptographicHash::Sha256,
+        password.toUtf8(),
+        salt.toUtf8(),
+        PBKDF2_ITERATIONS,
+        PBKDF2_DKLEN
+    );
+    return key.toHex() == passwordHash.toUtf8();
+}
+
+QJsonObject User::toJson() const
+{
     QJsonObject obj;
     obj["id"] = id;
     obj["username"] = username;
-    obj["passwordHash"] = passwordHash;
-    obj["salt"] = salt;
     obj["role"] = role;
     obj["fullName"] = fullName;
     obj["email"] = email;
@@ -41,22 +44,4 @@ QJsonObject User::toJson() const {
     obj["mustChangePassword"] = mustChangePassword;
     obj["createdAt"] = createdAt.toString(Qt::ISODate);
     return obj;
-}
-
-User User::fromJson(const QJsonObject &json) {
-    User user;
-    user.id = json["id"].toString();
-    user.username = json["username"].toString();
-    user.passwordHash = json["passwordHash"].toString();
-    user.salt = json["salt"].toString();
-    user.role = json["role"].toString("viewer");
-    user.fullName = json["fullName"].toString();
-    user.email = json["email"].toString();
-    user.isActive = json["isActive"].toBool(true);
-    user.mustChangePassword = json["mustChangePassword"].toBool(false);
-    user.createdAt = QDateTime::fromString(json["createdAt"].toString(), Qt::ISODate);
-    if (!user.createdAt.isValid()) {
-        user.createdAt = QDateTime::currentDateTime();
-    }
-    return user;
 }

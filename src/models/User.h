@@ -2,14 +2,13 @@
 #define USER_H
 
 #include <QString>
-#include <QJsonObject>
 #include <QDateTime>
-#include <QCryptographicHash>
+#include <QJsonObject>
+
+class DatabaseService;
 
 class User {
 public:
-    User();
-
     QString id;
     QString username;
     QString passwordHash;
@@ -17,17 +16,15 @@ public:
     QString role;
     QString fullName;
     QString email;
-    bool isActive;
-    bool mustChangePassword;
+    bool isActive = true;
+    bool mustChangePassword = true;
     QDateTime createdAt;
 
-    void setPassword(const QString &password, const QString &salt);
+    User() = default;
+
+    void setPassword(const QString &password, const QString &newSalt);
     bool checkPassword(const QString &password) const;
-
     QJsonObject toJson() const;
-    static User fromJson(const QJsonObject &json);
-
-
 };
 
 #endif

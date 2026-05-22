@@ -13,4 +13,5 @@ add_library(siem_models STATIC
 target_link_libraries(siem_models PUBLIC
     Qt6::Core
     Qt6::Network
+    Qt6::Sql
 )

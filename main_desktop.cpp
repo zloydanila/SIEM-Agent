@@ -45,8 +45,11 @@ int main(int argc, char *argv[])
     }
     QGuiApplication app(argc, argv);
 
+    QCoreApplication::setOrganizationName("SIEMAgent");
+    QCoreApplication::setApplicationName("SIEMAgent");
+
     DatabaseService dbService("siem_ui_connection");
-    if (!dbService.open()) {
+    if (!dbService.openWithPath(DatabaseService::defaultDbPath())) {
         qDebug() << "DB open error:" << dbService.lastError();
         return -1;
     }

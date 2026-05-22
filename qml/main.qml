@@ -18,13 +18,12 @@ ApplicationWindow {
     property bool isAuthenticated: false
     property var  currentUser: null
 
-    // ── Слой: логин ────────────────────────────────────────────
     Loader {
         id: loginLoader
         anchors.fill: parent
         source: Qt.resolvedUrl("pages/LoginPage.qml")
         visible: !mainWindow.isAuthenticated
-        active:  !mainWindow.isAuthenticated
+        active: !mainWindow.isAuthenticated
 
         Connections {
             target: loginLoader.item
@@ -35,7 +34,6 @@ ApplicationWindow {
         }
     }
 
-    // ── Слой: основной интерфейс ───────────────────────────────
     RowLayout {
         anchors.fill: parent
         spacing: 0
@@ -60,17 +58,14 @@ ApplicationWindow {
             Layout.fillHeight: true
             currentIndex: 0
 
-            // 0 — Дашборд
             Loader {
                 id: dashLoader
-                source: mainWindow.isAuthenticated
-                        ? Qt.resolvedUrl("pages/DashboardPage.qml")
-                        : ""
+                source: mainWindow.isAuthenticated ? Qt.resolvedUrl("pages/DashboardPage.qml") : ""
                 active: mainWindow.isAuthenticated
 
                 onLoaded: {
                     item.currentUserName     = mainWindow.currentUser?.username ?? ""
-                    item.currentUserRole     = mainWindow.currentUser?.role     ?? ""
+                    item.currentUserRole     = mainWindow.currentUser?.role ?? ""
                     item.editUserDialog      = mainWindow.editUserDialog
                     item.confirmDeleteDialog = mainWindow.confirmDeleteDialog
                 }
@@ -88,45 +83,34 @@ ApplicationWindow {
                 }
             }
 
-            // 1 — События
             Loader {
                 id: eventsLoader
-                source: mainWindow.isAuthenticated
-                        ? Qt.resolvedUrl("pages/EventsPage.qml")
-                        : ""
+                source: mainWindow.isAuthenticated ? Qt.resolvedUrl("pages/EventsPage.qml") : ""
                 active: mainWindow.isAuthenticated
             }
 
-            // 2 — Алерты
             Loader {
                 id: alertsLoader
-                source: mainWindow.isAuthenticated
-                        ? Qt.resolvedUrl("pages/AlertsPage.qml")
-                        : ""
+                source: mainWindow.isAuthenticated ? Qt.resolvedUrl("pages/AlertsPage.qml") : ""
                 active: mainWindow.isAuthenticated
                 onLoaded: {
                     item.currentUserRole = mainWindow.currentUser?.role ?? "viewer"
                 }
             }
 
-            // 3 — Настройки
             Loader {
                 id: settingsLoader
-                source: mainWindow.isAuthenticated
-                        ? Qt.resolvedUrl("pages/SettingPage.qml")
-                        : ""
+                source: mainWindow.isAuthenticated ? Qt.resolvedUrl("pages/SettingPage.qml") : ""
                 active: mainWindow.isAuthenticated
 
                 onLoaded: {
-                    // ✅ ИСПРАВЛЕНИЕ: передаём диалог и роль в страницу настроек
                     item.changePasswordDialog = mainWindow.changePasswordDialog
-                    item.currentUserRole      = mainWindow.currentUser?.role ?? "viewer"
+                    item.currentUserRole = mainWindow.currentUser?.role ?? "viewer"
                 }
             }
         }
     }
 
-    // ── Диалоги ────────────────────────────────────────────────
     Loader {
         id: registerDialogLoader
         source: Qt.resolvedUrl("pages/RegisterUserDialog.qml")
@@ -155,12 +139,11 @@ ApplicationWindow {
         onLoaded: { item.authManager = authManager }
     }
 
-    property var registerDialog:       registerDialogLoader.item
-    property var editUserDialog:       editUserDialogLoader.item
-    property var confirmDeleteDialog:  confirmDeleteDialogLoader.item
+    property var registerDialog: registerDialogLoader.item
+    property var editUserDialog: editUserDialogLoader.item
+    property var confirmDeleteDialog: confirmDeleteDialogLoader.item
     property var changePasswordDialog: changePasswordDialogLoader.item
 
-    // ── Сигналы от authManager ─────────────────────────────────
     Connections {
         target: authManager
 
@@ -168,25 +151,24 @@ ApplicationWindow {
             mainWindow.isAuthenticated = true
             mainWindow.currentUser = {
                 username: username,
-                role:     role,
+                role: role,
                 fullName: fullName,
-                email:    email
+                email: email
             }
             sidebar.currentUser = mainWindow.currentUser
 
             Qt.callLater(function() {
                 if (dashLoader.item) {
-                    dashLoader.item.currentUserName     = username
-                    dashLoader.item.currentUserRole     = role
-                    dashLoader.item.editUserDialog      = mainWindow.editUserDialog
+                    dashLoader.item.currentUserName = username
+                    dashLoader.item.currentUserRole = role
+                    dashLoader.item.editUserDialog = mainWindow.editUserDialog
                     dashLoader.item.confirmDeleteDialog = mainWindow.confirmDeleteDialog
                 }
                 if (alertsLoader.item) {
                     alertsLoader.item.currentUserRole = role
                 }
-                // ✅ ИСПРАВЛЕНИЕ: обновляем роль и диалог в настройках после логина
                 if (settingsLoader.item) {
-                    settingsLoader.item.currentUserRole      = role
+                    settingsLoader.item.currentUserRole = role
                     settingsLoader.item.changePasswordDialog = mainWindow.changePasswordDialog
                 }
             })
@@ -211,10 +193,10 @@ ApplicationWindow {
 
         function onLoggedOut() {
             mainWindow.isAuthenticated = false
-            mainWindow.currentUser     = null
-            sidebar.currentUser        = null
-            sidebar.currentIndex       = 0
-            pageLoader.currentIndex    = 0
+            mainWindow.currentUser = null
+            sidebar.currentUser = null
+            sidebar.currentIndex = 0
+            pageLoader.currentIndex = 0
         }
 
         function onRegistrationFailed(reason) {

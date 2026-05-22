@@ -4,7 +4,10 @@
 
 RuleListModel::RuleListModel(DatabaseService *db, QObject *parent)
     : QAbstractListModel(parent), m_db(db) {
-    refresh();
+    if (m_db) {
+        m_db->seedDefaultRules();
+        refresh();
+    }
 }
 
 int RuleListModel::rowCount(const QModelIndex &parent) const {

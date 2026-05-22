@@ -33,8 +33,8 @@ public:
 
     Q_INVOKABLE void refresh();
     Q_INVOKABLE bool addRule(const QString &name, const QString &ruleType, const QString &matchEventType, const QString &secondaryEventType,
-                            int threshold,  int windowSeconds, int cooldownSeconds, const QString &alertSeverity, 
-                            const QString &alertTitle, const QString &alertDisctiption);
+                             int threshold, int windowSeconds, int cooldownSeconds, const QString &alertSeverity,
+                             const QString &alertTitle, const QString &alertDescription);
 
     Q_INVOKABLE bool removeRule(const QString &ruleId);
     Q_INVOKABLE bool toggleRule(const QString &ruleId, bool enabled);

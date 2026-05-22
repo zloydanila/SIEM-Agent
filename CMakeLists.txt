@@ -8,7 +8,9 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-set(QML_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+option(BUILD_DESKTOP "Build QML desktop app" ON)
+option(BUILD_SERVER "Build headless server app" ON)
+option(BUILD_TESTS "Build tests" ON)
 
 find_package(Qt6 REQUIRED COMPONENTS
     Core
@@ -18,32 +20,55 @@ find_package(Qt6 REQUIRED COMPONENTS
     Sql
     WebSockets
     Network
+    Test
 )
 
 add_subdirectory(src)
 
+if(BUILD_DESKTOP)
+    qt_add_executable(siem-desktop
+        main_desktop.cpp
+    )
 
-add_executable(${PROJECT_NAME}
-    main.cpp
-)
+    qt6_add_resources(DESKTOP_RESOURCES qml.qrc)
+    target_sources(siem-desktop PRIVATE ${DESKTOP_RESOURCES})
 
-qt6_add_resources(RESOURCES qml.qrc)
-target_sources(${PROJECT_NAME} PRIVATE ${RESOURCES})
+    target_link_libraries(siem-desktop PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::Sql
+        Qt6::WebSockets
+        Qt6::Network
+        siem_core
+        siem_models
+        siem_managers
+        siem_services
+        siem_engine
+    )
+endif()
 
-target_link_libraries(${PROJECT_NAME} PRIVATE
-    Qt6::Core
-    Qt6::Gui
-    Qt6::Qml
-    Qt6::Quick
-    Qt6::Sql
-    Qt6::WebSockets
-    Qt6::Network
-    siem_core
-    siem_models
-    siem_managers
-    siem_services
-    siem_engine
-)
+if(BUILD_SERVER)
+    qt_add_executable(siem-server
+        main_server.cpp
+    )
+
+    target_link_libraries(siem-server PRIVATE
+        Qt6::Core
+        Qt6::Sql
+        Qt6::WebSockets
+        Qt6::Network
+        siem_core
+        siem_models
+        siem_managers
+        siem_services
+        siem_engine
+    )
+endif()
 
 enable_testing()
-add_subdirectory(tests)
+
+if(BUILD_TESTS)
+    add_subdirectory(tests)
+endif()

@@ -4,6 +4,7 @@ add_library(siem_services STATIC
     WebSocketWorker.cpp
     ReportService.cpp
     ReportService.h
+    HttpServer.cpp
 )
 
 target_link_libraries(siem_services PUBLIC

@@ -1,0 +1,113 @@
+export const state = {
+  page: "dashboard",
+  isAuthenticated: false,
+  currentUser: null,
+  mustChangePassword: false,
+  wsConnected: false,
+  wsPort: 8080,
+  wsClients: 0,
+  dashboard: {
+    stats: {},
+    activity: [],
+    topDevices: [],
+    recentEvents: [],
+    alerts: []
+  },
+  users: [],
+  events: [],
+  alerts: [],
+  rules: [],
+  alertsFilter: "",
+  lastUpdated: null,
+  dataVersion: 0
+};
+
+const listeners = new Set();
+
+export function subscribe(fn) {
+  listeners.add(fn);
+  try { fn(state); } catch (e) { console.error(e); }
+  return () => listeners.delete(fn);
+}
+
+export function notify() {
+  listeners.forEach(fn => {
+    try { fn(state); } catch (e) { console.error(e); }
+  });
+}
+
+export function setState(patch) {
+  let changed = false;
+  for (const [key, value] of Object.entries(patch)) {
+    if (JSON.stringify(state[key]) !== JSON.stringify(value)) {
+      state[key] = value;
+      changed = true;
+    }
+  }
+  if (changed) {
+    state.lastUpdated = Date.now();
+    state.dataVersion++;
+    notify();
+  }
+}
+
+export function setDashboard(patch) {
+  const next = { ...(state.dashboard || {}) };
+  let changed = false;
+  for (const [key, value] of Object.entries(patch)) {
+    if (JSON.stringify(next[key]) !== JSON.stringify(value)) {
+      next[key] = value;
+      changed = true;
+    }
+  }
+  if (changed) {
+    state.dashboard = next;
+    state.lastUpdated = Date.now();
+    state.dataVersion++;
+    notify();
+  }
+}
+
+export function setUser(user) {
+  const actualUser = user?.user || user;
+  state.currentUser = actualUser;
+  state.isAuthenticated = !!actualUser;
+  state.lastUpdated = Date.now();
+  state.dataVersion++;
+  notify();
+}
+
+export function setAlertsFilter(filter) {
+  const next = String(filter || "");
+  if (state.alertsFilter !== next) {
+    state.alertsFilter = next;
+    state.lastUpdated = Date.now();
+    state.dataVersion++;
+    notify();
+  }
+}
+
+export function clearSession() {
+  state.page = "dashboard";
+  state.isAuthenticated = false;
+  state.currentUser = null;
+  state.mustChangePassword = false;
+  state.wsConnected = false;
+  state.wsPort = 8080;
+  state.wsClients = 0;
+  state.dashboard = {
+    stats: {},
+    activity: [],
+    topDevices: [],
+    recentEvents: [],
+    alerts: []
+  };
+  state.users = [];
+  state.events = [];
+  state.alerts = [];
+  state.rules = [];
+  state.alertsFilter = "";
+  state.lastUpdated = Date.now();
+  state.dataVersion++;
+  notify();
+}
