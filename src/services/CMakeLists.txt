@@ -13,4 +13,5 @@ target_link_libraries(siem_services PUBLIC
     Qt6::WebSockets
     Qt6::Network
     siem_models
+    siem_engine
 )

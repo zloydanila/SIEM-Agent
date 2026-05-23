@@ -35,6 +35,7 @@ public:
     void setRuleListModel(RuleListModel *rules);
     void setWebRoot(const QString &root);
     void setAllowedOrigin(const QString &origin);
+    QJsonArray eventsJson(int limit, int offset) const; 
 
 signals:
     void serverStarted(quint16 port);

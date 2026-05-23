@@ -6,4 +6,4 @@ RUN pip install --no-cache-dir websockets
 
 COPY scripts/simulator.py .
 
-CMD ["python", "-u", "simulator.py"a]
+CMD ["python3", "-u", "simulator.py"] 

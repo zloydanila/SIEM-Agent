@@ -83,22 +83,22 @@ def generate_event() -> dict:
 
 def sign_event(event: dict, secret: str) -> dict:
     if not secret:
+        print(f"[SIGN] EMPTY SECRET — event will be unsigned!")
         return event
 
     nonce = str(uuid.uuid4())
-
     payload = event["deviceName"] + event["eventType"] + nonce + secret
 
     signature = hmac.new(
-        secret.encode(),
-        payload.encode(),
-        digestmod=hashlib.sha256
+        secret.encode("utf-8"),
+        payload.encode("utf-8"),
+        digestmod=hashlib.sha256,
     ).hexdigest()
 
-    event["nonce"]     = nonce
-    event["signature"] = signature
-    return event
 
+    event["nonce"] = nonce
+    event["signature"] = signature
+    return event  
 
 async def run_simulator():
     uri = f"wss://{WS_HOST}:{WS_PORT}"

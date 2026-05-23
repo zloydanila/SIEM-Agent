@@ -1,5 +1,6 @@
 #include "EventListModel.h"
 #include "../services/DatabaseService.h"
+#include "Event.h"  
 
 EventListModel::EventListModel(DatabaseService *db, QObject *parent)
     : QAbstractListModel(parent), m_db(db)
@@ -65,7 +66,8 @@ void EventListModel::appendNew()
     if (!m_db)
         return;
 
-    QVector<Event> fresh = m_db->getEventsPaged(1, QString(), QDateTime());
+    // Берём самый свежий (limit=1, offset=0)
+    QVector<Event> fresh = m_db->getRecentEvents(1, 0);
     if (fresh.isEmpty())
         return;
 

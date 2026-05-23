@@ -16,19 +16,23 @@ class CorrelationEngine : public QObject {
     Q_OBJECT
 
 public:
-    explicit CorrelationEngine(DatabaseService *db, QObject *parent = nullptr);
+    explicit CorrelationEngine(DatabaseService *db = nullptr, QObject *parent = nullptr);
+    ~CorrelationEngine();
 
     void analyze(const Event &event);
     void reloadRules();
     void addRule(const Rule &rule);
     void globalCleanup();
 
+    void initializeDatabase(const QString &dbPath);
+
 signals:
     void alertCreated();
 
 private:
 
-    DatabaseService *m_db;
+    DatabaseService *m_db = nullptr;
+    bool m_ownsDatabase = false;  // Если true, то m_db создан этим объектом
     QList<Rule> m_rules;
     
     QHash<QString, QList<EventRecord>> m_history;

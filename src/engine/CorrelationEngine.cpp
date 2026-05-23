@@ -2,9 +2,10 @@
 #include "../services/DatabaseService.h"
 #include <QDebug>
 #include <QUuid>
+#include <QThread>
 
 CorrelationEngine::CorrelationEngine(DatabaseService *db, QObject *parent)
-    : QObject(parent), m_db(db) {
+    : QObject(parent), m_db(db), m_ownsDatabase(false) {
     if (m_db) {
         m_db->seedDefaultRules();
         reloadRules();
@@ -14,6 +15,47 @@ CorrelationEngine::CorrelationEngine(DatabaseService *db, QObject *parent)
         }
         qDebug() << "[CorrelationEngine] Restored" << persistentHistory.size() << "events from DB history";
     }
+}
+
+CorrelationEngine::~CorrelationEngine() {
+    // === НОВОЕ: удаляем БД если мы её создали ===
+    if (m_ownsDatabase && m_db) {
+        m_db->deleteLater();
+        m_db = nullptr;
+    }
+}
+
+void CorrelationEngine::initializeDatabase(const QString &dbPath) {
+    // === НОВОЕ: создание БД в текущем потоке ===
+    if (m_db && m_ownsDatabase) {
+        m_db->deleteLater();
+        m_db = nullptr;
+    }
+    
+    QString threadName = QString::number((quint64)QThread::currentThread(), 16);
+    QString connectionName = QString("correlation_engine_%1").arg(threadName);
+    
+    qDebug() << "[CorrelationEngine] Creating database connection in thread" << threadName 
+             << "with connectionName=" << connectionName;
+    
+    m_db = new DatabaseService(connectionName, this);
+    m_ownsDatabase = true;
+    
+    if (!m_db->openWithPath(dbPath)) {
+        qCritical() << "[CorrelationEngine] Failed to open database:" << m_db->lastError();
+        delete m_db;
+        m_db = nullptr;
+        return;
+    }
+    
+    m_db->seedDefaultRules();
+    reloadRules();
+    auto persistentHistory = m_db->loadRecentHistory(2000);
+    for (const auto& rec : persistentHistory) {
+        m_history[rec.deviceName].append(rec);
+    }
+    qDebug() << "[CorrelationEngine] Database initialized in thread. Restored" 
+             << persistentHistory.size() << "events from history";
 }
 
 void CorrelationEngine::reloadRules() {
@@ -52,6 +94,39 @@ void CorrelationEngine::analyze(const Event &event) {
             analyzeThreshold(rule, event, record);
         } else if (rule.ruleType == "correlation") {
             analyzeCorrelation(rule, event);
+        }
+    }
+
+    // === Автоматическое создание алертов для high/critical событий ===
+    QString sev = event.severity.toLower();
+    if (sev == "high" || sev == "critical") {
+        Alert alert;
+        alert.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        alert.title = "Высокоприоритетное событие: " + event.eventType;
+        alert.description = QString("Автоматически созданный алерт для события с серьезностью '%1'\n"
+                                   "Устройство: %2\n"
+                                   "Тип события: %3\n"
+                                   "Действие: %4\n"
+                                   "Лог: %5")
+                          .arg(event.severity)
+                          .arg(event.deviceName)
+                          .arg(event.eventType)
+                          .arg(event.action)
+                          .arg(event.rawLog);
+        alert.severity = event.severity;
+        alert.status = "open";
+        alert.deviceName = event.deviceName;
+        alert.triggeredAt = event.timestamp.isValid() 
+                          ? event.timestamp 
+                          : QDateTime::currentDateTimeUtc();
+        alert.ruleId = "";
+        alert.assignedTo = "";
+        alert.comment = "Авто-создан (severity=" + event.severity + ")";
+
+        if (m_db->createAlert(alert)) {
+            qDebug() << "[CorrelationEngine] Auto-alert created for HIGH/CRITICAL event:"
+                     << event.deviceName << "severity=" << event.severity;
+            emit alertCreated();
         }
     }
 }

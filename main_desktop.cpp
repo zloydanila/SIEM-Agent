@@ -7,6 +7,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTextStream>
+#include <QDir>
 
 #include "src/services/DatabaseService.h"
 #include "src/managers/AuthManager.h"
@@ -24,10 +25,18 @@
 
 static constexpr quint16 WS_PORT = 8080;
 
+// === ИЗМЕНЕНО: единый путь к БД для десктопа и сервера ===
+static QString sharedDbPath()
+{
+    QString base = QDir::homePath() + "/.local/share/SIEMAgent";
+    QDir().mkpath(base);
+    return base + "/siemagent.db";
+}
+
 int main(int argc, char *argv[])
 {
-
     Logger::instance().init("logs");
+
     QFile envFile(".env");
     if (envFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QTextStream in(&envFile);
@@ -43,13 +52,15 @@ int main(int argc, char *argv[])
         envFile.close();
         qInfo() << "[CONFIG] .env файл загружен";
     }
+
     QGuiApplication app(argc, argv);
 
     QCoreApplication::setOrganizationName("SIEMAgent");
     QCoreApplication::setApplicationName("SIEMAgent");
 
+    // === ИЗМЕНЕНО: используем sharedDbPath() вместо defaultDbPath() ===
     DatabaseService dbService("siem_ui_connection");
-    if (!dbService.openWithPath(DatabaseService::defaultDbPath())) {
+    if (!dbService.openWithPath(sharedDbPath())) {
         qDebug() << "DB open error:" << dbService.lastError();
         return -1;
     }
@@ -112,7 +123,7 @@ int main(int argc, char *argv[])
                      &eventListModel, &EventListModel::refresh);
     QObject::connect(&statsModel, &DashboardStatsModel::alertsCleared,
                      &alertListModel, &AlertListModel::refresh);
-    
+
     QObject::connect(&wsService, &WebSocketService::eventForCorrelation,
                  &correlationEngine, &CorrelationEngine::analyze,
                  Qt::QueuedConnection);

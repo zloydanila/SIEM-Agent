@@ -6,6 +6,7 @@
 #include <QVariant>
 #include <QVariantMap>
 #include <QDir>
+#include <QFileInfo>
 #include <QStandardPaths>
 #include <QCryptographicHash>
 #include <QRandomGenerator>
@@ -74,6 +75,13 @@ bool DatabaseService::openWithPath(const QString &path) {
         m_dbPath = base + "/siemagent.db";
     } else {
         m_dbPath = path;
+        // === ИСПРАВЛЕНИЕ: создаём папку для явно указанного пути ===
+        QFileInfo fileInfo(m_dbPath);
+        QString dirPath = fileInfo.absolutePath();
+        if (!QDir().mkpath(dirPath)) {
+            m_lastError = QString("Failed to create directory: %1").arg(dirPath);
+            return false;
+        }
     }
 
     db.setDatabaseName(m_dbPath);
@@ -86,6 +94,11 @@ bool DatabaseService::openWithPath(const QString &path) {
     m_opened = true;
     return initSchema();
 }
+
+QString DatabaseService::dbPath() const {
+    return m_dbPath;
+}
+
 
 void DatabaseService::close() {
     if (!m_opened) return;
@@ -637,6 +650,7 @@ QVector<Event> DatabaseService::getRecentEvents(int limit, int offset) const {
         e.action = q.value("action").toString();
         e.severity = q.value("severity").toString();
         e.timestamp = QDateTime::fromString(q.value("timestamp").toString(), Qt::ISODate);
+        if (e.timestamp.isValid()) e.timestamp.setTimeSpec(Qt::UTC); 
         e.rawLog = q.value("raw_log").toString();
         e.location = q.value("location").toString();
         events.append(e);
@@ -680,6 +694,7 @@ QVector<Event> DatabaseService::getEventsPaged(int limit, const QString &lastId,
         e.action = q.value("action").toString();
         e.severity = q.value("severity").toString();
         e.timestamp = QDateTime::fromString(q.value("timestamp").toString(), Qt::ISODate);
+        if (e.timestamp.isValid()) e.timestamp.setTimeSpec(Qt::UTC); 
         e.rawLog = q.value("raw_log").toString();
         e.location = q.value("location").toString();
         events.append(e);
@@ -710,6 +725,7 @@ QVector<Event> DatabaseService::getEventsByDateRange(const QDateTime &from, cons
         e.action = q.value("action").toString();
         e.severity = q.value("severity").toString();
         e.timestamp = QDateTime::fromString(q.value("timestamp").toString(), Qt::ISODate);
+        if (e.timestamp.isValid()) e.timestamp.setTimeSpec(Qt::UTC); 
         e.rawLog = q.value("raw_log").toString();
         e.location = q.value("location").toString();
         events.append(e);
@@ -799,6 +815,7 @@ QVector<Alert> DatabaseService::getActiveAlerts() const {
         a.status = q.value("status").toString();
         a.deviceName = q.value("device_name").toString();
         a.triggeredAt = QDateTime::fromString(q.value("triggered_at").toString(), Qt::ISODate);
+        if (a.triggeredAt.isValid()) a.triggeredAt.setTimeSpec(Qt::UTC);
         a.ruleId = q.value("rule_id").toString();
         a.assignedTo = q.value("assigned_to").toString();
         a.comment = q.value("comment").toString();
@@ -828,6 +845,7 @@ QVector<Alert> DatabaseService::getAllAlerts() const {
         a.status = q.value("status").toString();
         a.deviceName = q.value("device_name").toString();
         a.triggeredAt = QDateTime::fromString(q.value("triggered_at").toString(), Qt::ISODate);
+        if (a.triggeredAt.isValid()) a.triggeredAt.setTimeSpec(Qt::UTC);
         a.ruleId = q.value("rule_id").toString();
         a.assignedTo = q.value("assigned_to").toString();
         a.comment = q.value("comment").toString();

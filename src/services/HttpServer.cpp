@@ -20,6 +20,7 @@
 #include <QJsonArray>
 #include <QDateTime>
 #include <QUrl>
+#include <QUrlQuery>
 #include <QCryptographicHash>
 #include <QDebug>
 
@@ -28,23 +29,6 @@ static QString normalizeAlertStatus(const QString &status) {
     if (s == "open" || s == "investigating" || s == "closed") return s;
     if (s == "in_progress" || s == "working") return "investigating";
     return {};
-}
-
-static bool checkOperatorOrAdminSession(const QHash<QByteArray, QByteArray> &headers,
-                                        const QHash<QString, HttpServer::Session> &sessions,
-                                        QString *tokenOut = nullptr) {
-    const QByteArray auth = headers.value("authorization");
-    if (!auth.startsWith("Bearer ")) return false;
-
-    const QString token = QString::fromUtf8(auth.mid(7).trimmed());
-    if (tokenOut) *tokenOut = token;
-
-    auto it = sessions.constFind(token);
-    if (it == sessions.constEnd()) return false;
-    if (QDateTime::currentMSecsSinceEpoch() > it->expiresAt) return false;
-
-    const QString role = it->role.trimmed().toLower();
-    return role == "admin" || role == "operator";
 }
 
 static constexpr qint64 SESSION_TTL_MS = 24LL * 60 * 60 * 1000;
@@ -296,13 +280,24 @@ void HttpServer::processRequest(QTcpSocket *socket, const QByteArray &request) {
         return;
     }
 
+    // === ИЗМЕНЕНО: пагинация /api/events ===
     if (path == "/api/events" && method == "GET") {
         QString token;
         if (!checkAuth(headers, &token)) {
             sendText(socket, "Unauthorized", 401);
             return;
         }
-        sendJson(socket, eventsJson(100));
+
+        QUrlQuery query(url.query());
+        int limit = query.queryItemValue("limit").toInt();
+        int offset = query.queryItemValue("offset").toInt();
+        if (limit <= 0 || limit > 500) limit = 50;
+        if (offset < 0) offset = 0;
+
+        QJsonObject out;
+        out["events"] = eventsJson(limit, offset);
+        out["total"] = m_db ? m_db->getTotalEventsCount() : 0;
+        sendJson(socket, out);
         return;
     }
 
@@ -649,6 +644,15 @@ QJsonArray HttpServer::eventsJson(int limit) const {
     QJsonArray arr;
     if (!m_db) return arr;
     const auto events = m_db->getRecentEvents(limit);
+    for (const auto &e : events) arr.append(e.toJson());
+    return arr;
+}
+
+// === ИЗМЕНЕНО: перегрузка с limit/offset ===
+QJsonArray HttpServer::eventsJson(int limit, int offset) const {
+    QJsonArray arr;
+    if (!m_db) return arr;
+    const auto events = m_db->getRecentEvents(limit, offset);
     for (const auto &e : events) arr.append(e.toJson());
     return arr;
 }

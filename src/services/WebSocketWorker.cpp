@@ -119,29 +119,14 @@ bool WebSocketWorker::checkRateLimit(const QString &ip) {
     if (state.timestamps.size() >= 50) {
         state.blockedUntil = now + 60000;
         qWarning() << "[WSS] RATE LIMIT: IP" << ip << "заблокирован на 60с";
-        if (m_dbService) {
-            Event floodEvent;
-            floodEvent.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
-            floodEvent.deviceName = "SIEM Agent";
-            floodEvent.eventType = "ddos_detected";
-            floodEvent.action = "block_ip";
-            floodEvent.severity = "critical";
-            floodEvent.timestamp = QDateTime::currentDateTimeUtc();
-            floodEvent.rawLog = QString("Превышен лимит (>50/сек). IP: %1").arg(ip);
-            floodEvent.location = ip;
-
-            if (m_dbService->createEvent(floodEvent)) {
-                emit eventReceived();
-                processCorrelation(floodEvent);
-            }
-        }
         return false;
     }
     state.timestamps.enqueue(now);
     return true;
 }
 
-void WebSocketWorker::onTextMessageReceived(const QString &message) {
+void WebSocketWorker::onTextMessageReceived(const QString &message)
+{
     QWebSocket *client = qobject_cast<QWebSocket*>(sender());
     if (!client) return;
 
@@ -164,7 +149,11 @@ void WebSocketWorker::onTextMessageReceived(const QString &message) {
     if (m_dbService && m_dbService->createEvent(event)) {
         emit eventReceived();
         broadcastJson(QJsonObject{{"type", "event"}, {"payload", event.toJson()}}, client);
-        processCorrelation(event);
+
+        // === ИЗМЕНЕНО: возвращаем автосоздание алертов ===
+        if (m_correlationEngine) {
+            m_correlationEngine->analyze(event);
+        }
     }
 }
 
@@ -187,8 +176,10 @@ bool WebSocketWorker::validateMessage(const QJsonObject &json) {
 
 bool WebSocketWorker::verifyHmac(const QJsonObject &json) {
     if (m_secret.isEmpty()) return true;
+
     const QString nonce = json.value("nonce").toString();
     const QString signature = json.value("signature").toString();
+
     if (nonce.isEmpty() || signature.isEmpty()) {
         qWarning() << "[WSS] Отклонено: отсутствует nonce или signature";
         return false;
@@ -197,15 +188,26 @@ bool WebSocketWorker::verifyHmac(const QJsonObject &json) {
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (m_usedNonces.contains(nonce)) {
         if (now - m_usedNonces[nonce].timestamp <= NONCE_TTL_MS) {
-            qWarning() << "[WSS] Отклонено: replay attack (nonce повторный)";
+            qWarning() << "[WSS] Отклонено: replay attack";
             return false;
         }
         m_usedNonces.remove(nonce);
     }
 
-    QString payload = json.value("deviceName").toString() + json.value("eventType").toString() + nonce + m_secret;
-    QByteArray expected = QMessageAuthenticationCode::hash(payload.toUtf8(), m_secret.toUtf8(), QCryptographicHash::Sha256).toHex();
-    if (expected != signature.toUtf8()) {
+    QString payload = json.value("deviceName").toString() 
+                    + json.value("eventType").toString() 
+                    + nonce 
+                    + m_secret;
+
+    QByteArray expected = QMessageAuthenticationCode::hash(
+        payload.toUtf8(), 
+        m_secret.toUtf8(), 
+        QCryptographicHash::Sha256
+    ).toHex().toLower(); 
+
+    QByteArray received = signature.toUtf8().toLower();  
+
+    if (expected != received) {
         qWarning() << "[WSS] Отклонено - неверная HMAC-подпись";
         return false;
     }
@@ -230,69 +232,14 @@ void WebSocketWorker::broadcastJson(const QJsonObject &message, QWebSocket *exce
     }
 }
 
+void WebSocketWorker::setCorrelationEngine(CorrelationEngine *engine)
+{
+    m_correlationEngine = engine;
+}
+
+
+
 void WebSocketWorker::processCorrelation(const Event &event) {
-    if (!m_dbService) return;
+    Q_UNUSED(event)
 
-    m_dbService->saveEventForCorrelation(event.deviceName, event.eventType, event.timestamp);
-
-    if (event.severity == "high" || event.severity == "critical") {
-        Alert alert;
-        alert.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
-        alert.title = QString("High severity event: %1").arg(event.eventType);
-        alert.description = event.rawLog.isEmpty() ? event.eventType : event.rawLog;
-        alert.severity = event.severity;
-        alert.status = "open";
-        alert.deviceName = event.deviceName;
-        alert.triggeredAt = QDateTime::currentDateTimeUtc();
-        alert.ruleId = "";
-        alert.relatedEventIds = { event.id };
-
-        if (m_dbService->createAlert(alert)) {
-            emit alertReceived();
-            broadcastJson(QJsonObject{{"type", "alert"}, {"payload", alert.toJson()}});
-        }
-    }
-
-    const auto rules = m_dbService->getAllRules();
-    for (const auto &rule : rules) {
-        if (!rule.isEnabled) continue;
-
-        bool triggered = false;
-        if (rule.ruleType == "threshold") {
-            const auto recent = m_dbService->getRecentEvents(rule.windowSeconds, 0);
-            int count = 0;
-            for (const auto &e : recent) {
-                if (e.eventType == rule.matchEventType) ++count;
-            }
-            triggered = count >= rule.threshold;
-        } else if (rule.ruleType == "correlation") {
-            const auto recent = m_dbService->loadRecentHistory(200);
-            bool first = false, second = false;
-            const qint64 now = QDateTime::currentDateTimeUtc().toSecsSinceEpoch();
-            for (const auto &r : recent) {
-                if (now - r.timestamp.toSecsSinceEpoch() > rule.windowSeconds) continue;
-                if (r.eventType == rule.matchEventType) first = true;
-                if (r.eventType == rule.secondaryEventType) second = true;
-            }
-            triggered = first && second;
-        }
-
-        if (!triggered) continue;
-
-        Alert alert;
-        alert.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
-        alert.title = rule.alertTitle.isEmpty() ? rule.name : rule.alertTitle;
-        alert.description = rule.alertDescription;
-        alert.severity = rule.alertSeverity;
-        alert.status = "open";
-        alert.deviceName = event.deviceName;
-        alert.triggeredAt = QDateTime::currentDateTimeUtc();
-        alert.ruleId = rule.id;
-        alert.relatedEventIds = { event.id };
-
-        if (m_dbService->createAlert(alert)) {
-            emit alertReceived();
-            broadcastJson(QJsonObject{{"type", "alert"}, {"payload", alert.toJson()}});
-        }
-    }
 }

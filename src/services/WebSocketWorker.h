@@ -11,6 +11,7 @@
 #include <QQueue>
 #include <QDateTime>
 #include "../models/Event.h"
+#include "../engine/CorrelationEngine.h"
 
 class DatabaseService;
 
@@ -26,6 +27,7 @@ public:
 
     bool isRunning() const;
     int clientCount() const;
+    void setCorrelationEngine(CorrelationEngine *engine);
 
 public slots:
     bool startServer(quint16 port, bool useWss = false,
@@ -66,6 +68,8 @@ private:
     static constexpr int NONCE_TRIM_TO = 8000;
     mutable QHash<QString, NonceEntry> m_usedNonces;
     mutable QQueue<QString> m_nonceLRU;
+
+    CorrelationEngine *m_correlationEngine = nullptr;
 
     struct ClientState {
         QQueue<qint64> timestamps;
