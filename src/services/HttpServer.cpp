@@ -291,8 +291,8 @@ void HttpServer::processRequest(QTcpSocket *socket, const QByteArray &request) {
 
     if (path == "/api/events" && method == "DELETE") {
         QString token;
-        if (!checkAuth(headers, &token)) {
-            sendText(socket, "Unauthorized", 401);
+        if (!checkOperator(headers, &token)) {
+            sendText(socket, "Forbidden", 403);
             return;
         }
         if (!m_db || !m_db->clearEvents()) {
@@ -317,8 +317,8 @@ void HttpServer::processRequest(QTcpSocket *socket, const QByteArray &request) {
 
     if (path == "/api/alerts" && method == "DELETE") {
         QString token;
-        if (!checkAuth(headers, &token)) {
-            sendText(socket, "Unauthorized", 401);
+        if (!checkOperator(headers, &token)) {
+            sendText(socket, "Forbidden", 403);
             return;
         }
         if (!m_db || !m_db->clearAlerts()) {
@@ -575,6 +575,19 @@ bool HttpServer::checkAdmin(const QHash<QByteArray, QByteArray> &headers, QStrin
     return isAdminSession(token);
 }
 
+bool HttpServer::checkOperator(const QHash<QByteArray, QByteArray> &headers, QString *tokenOut) const {
+    const QString token = bearerTokenFromHeaders(headers);
+    if (tokenOut) *tokenOut = token;
+    if (!validateSession(token)) return false;
+    const QString role = m_sessions.value(token).role.toLower();
+    return role == "admin" || role == "operator";
+}
+
+QString HttpServer::getRoleFromToken(const QString &token) const {
+    if (!validateSession(token)) return "";
+    return m_sessions.value(token).role;
+}
+
 QJsonObject HttpServer::dashboardJson() const {
     QJsonObject obj;
     if (!m_db) return obj;
@@ -671,60 +684,26 @@ bool HttpServer::handleApiUsers(QTcpSocket *socket, const QByteArray &method, co
     if (!m_db) return false;
 
     QString token;
-    if (!checkAdmin(headers, &token)) {
-        sendText(socket, "Forbidden", 403);
-        return true;
-    }
 
-    if (path == "/api/users" && method == "GET") {
-        sendJson(socket, usersJson());
-        return true;
-    }
-
-    if (path == "/api/users" && method == "POST") {
-        QJsonParseError err{};
-        QJsonDocument doc = QJsonDocument::fromJson(body, &err);
-        if (err.error != QJsonParseError::NoError || !doc.isObject()) {
-            sendText(socket, "Invalid JSON", 400);
+    // Разрешить GET для оператора и админа, а остальное только для админа
+    if (method == "GET") {
+        if (!checkOperator(headers, &token)) {
+            sendText(socket, "Forbidden", 403);
             return true;
         }
 
-        QJsonObject json = doc.object();
-        User user;
-        user.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
-        user.username = json.value("username").toString().trimmed();
-        user.fullName = json.value("fullName").toString().trimmed();
-        user.email = json.value("email").toString().trimmed();
-        user.role = json.value("role").toString("viewer");
-        user.isActive = json.value("isActive").toBool(true);
-        user.mustChangePassword = json.value("mustChangePassword").toBool(true);
-        user.createdAt = QDateTime::currentDateTime();
-
-        const QString password = json.value("password").toString();
-        if (user.username.isEmpty() || password.isEmpty()) {
-            sendText(socket, "Username and password required", 400);
+        if (path == "/api/users") {
+            sendJson(socket, usersJson());
+            return true;
+        }
+    } else {
+        // POST, PUT, DELETE - только для админа
+        if (!checkAdmin(headers, &token)) {
+            sendText(socket, "Forbidden", 403);
             return true;
         }
 
-        user.setPassword(password, m_db->generateSalt());
-        if (!m_db->createUser(user)) {
-            sendText(socket, m_db->lastError(), 500);
-            return true;
-        }
-
-        if (m_users) m_users->refresh();
-        sendJson(socket, user.toJson(), 201);
-        return true;
-    }
-
-    if (path.startsWith("/api/users/")) {
-        const QString id = path.mid(QString("/api/users/").size());
-        if (id.isEmpty()) {
-            sendText(socket, "Not Found", 404);
-            return true;
-        }
-
-        if (method == "PUT") {
+        if (path == "/api/users" && method == "POST") {
             QJsonParseError err{};
             QJsonDocument doc = QJsonDocument::fromJson(body, &err);
             if (err.error != QJsonParseError::NoError || !doc.isObject()) {
@@ -733,42 +712,86 @@ bool HttpServer::handleApiUsers(QTcpSocket *socket, const QByteArray &method, co
             }
 
             QJsonObject json = doc.object();
-            User user = m_db->findUserById(id);
-            if (user.id.isEmpty()) {
+            User user;
+            user.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            user.username = json.value("username").toString().trimmed();
+            user.fullName = json.value("fullName").toString().trimmed();
+            user.email = json.value("email").toString().trimmed();
+            user.role = json.value("role").toString("viewer");
+            user.isActive = json.value("isActive").toBool(true);
+            user.mustChangePassword = json.value("mustChangePassword").toBool(true);
+            user.createdAt = QDateTime::currentDateTime();
+
+            const QString password = json.value("password").toString();
+            if (user.username.isEmpty() || password.isEmpty()) {
+                sendText(socket, "Username and password required", 400);
+                return true;
+            }
+
+            user.setPassword(password, m_db->generateSalt());
+            if (!m_db->createUser(user)) {
+                sendText(socket, m_db->lastError(), 500);
+                return true;
+            }
+
+            if (m_users) m_users->refresh();
+            sendJson(socket, user.toJson(), 201);
+            return true;
+        }
+
+        if (path.startsWith("/api/users/")) {
+            const QString id = path.mid(QString("/api/users/").size());
+            if (id.isEmpty()) {
                 sendText(socket, "Not Found", 404);
                 return true;
             }
 
-            user.username = json.value("username").toString(user.username).trimmed();
-            user.fullName = json.value("fullName").toString(user.fullName).trimmed();
-            user.email = json.value("email").toString(user.email).trimmed();
-            user.role = json.value("role").toString(user.role);
-            user.isActive = json.value("isActive").toBool(user.isActive);
-            user.mustChangePassword = json.value("mustChangePassword").toBool(user.mustChangePassword);
+            if (method == "PUT") {
+                QJsonParseError err{};
+                QJsonDocument doc = QJsonDocument::fromJson(body, &err);
+                if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+                    sendText(socket, "Invalid JSON", 400);
+                    return true;
+                }
 
-            const QString password = json.value("password").toString();
-            if (!password.isEmpty()) {
-                user.setPassword(password, m_db->generateSalt());
-            }
+                QJsonObject json = doc.object();
+                User user = m_db->findUserById(id);
+                if (user.id.isEmpty()) {
+                    sendText(socket, "Not Found", 404);
+                    return true;
+                }
 
-            if (!m_db->updateUser(user)) {
-                sendText(socket, m_db->lastError(), 500);
+                user.username = json.value("username").toString(user.username).trimmed();
+                user.fullName = json.value("fullName").toString(user.fullName).trimmed();
+                user.email = json.value("email").toString(user.email).trimmed();
+                user.role = json.value("role").toString(user.role);
+                user.isActive = json.value("isActive").toBool(user.isActive);
+                user.mustChangePassword = json.value("mustChangePassword").toBool(user.mustChangePassword);
+
+                const QString password = json.value("password").toString();
+                if (!password.isEmpty()) {
+                    user.setPassword(password, m_db->generateSalt());
+                }
+
+                if (!m_db->updateUser(user)) {
+                    sendText(socket, m_db->lastError(), 500);
+                    return true;
+                }
+
+                if (m_users) m_users->refresh();
+                sendJson(socket, user.toJson());
                 return true;
             }
 
-            if (m_users) m_users->refresh();
-            sendJson(socket, user.toJson());
-            return true;
-        }
-
-        if (method == "DELETE") {
-            if (!m_db->deleteUser(id)) {
-                sendText(socket, m_db->lastError(), 500);
+            if (method == "DELETE") {
+                if (!m_db->deleteUser(id)) {
+                    sendText(socket, m_db->lastError(), 500);
+                    return true;
+                }
+                if (m_users) m_users->refresh();
+                sendJson(socket, QJsonObject{{"ok", true}});
                 return true;
             }
-            if (m_users) m_users->refresh();
-            sendJson(socket, QJsonObject{{"ok", true}});
-            return true;
         }
     }
 
@@ -891,13 +914,24 @@ bool HttpServer::handleApiRules(QTcpSocket *socket, const QByteArray &method, co
     if (!m_db) return false;
 
     QString token;
-    if (!checkAdmin(headers, &token)) {
-        sendText(socket, "Forbidden", 403);
-        return true;
+
+    // Разрешить GET для оператора и админа
+    if (method == "GET") {
+        if (!checkOperator(headers, &token)) {
+            sendText(socket, "Forbidden", 403);
+            return true;
+        }
+
+        if (path == "/api/rules") {
+            sendJson(socket, rulesJson());
+            return true;
+        }
+        return false;
     }
 
-    if (path == "/api/rules" && method == "GET") {
-        sendJson(socket, rulesJson());
+    // Остальные методы - только для админа
+    if (!checkAdmin(headers, &token)) {
+        sendText(socket, "Forbidden", 403);
         return true;
     }
 

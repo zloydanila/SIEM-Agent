@@ -2,18 +2,16 @@ import { alerts as loadAlerts, updateAlertStatus } from "../api.js";
 import { showToast } from "../components/toast.js";
 import { state, setAlertsFilter } from "../state.js";
 
-let alertsPollInterval = null;
 let currentContainerHandler = null;
 
 export async function renderAlerts({ alerts: initialAlerts = [], currentUser = {}, canManage = false, onRefresh, alertsFilter = "" } = {}) {
   const root = document.createElement("div");
-  root.className = "page-inner fade-in";
+  root.className = "page-inner";
 
   let data = Array.isArray(initialAlerts) ? initialAlerts : [];
   let error = null;
   let activeFilter = alertsFilter || state.alertsFilter || "";
 
-  if (alertsPollInterval) clearInterval(alertsPollInterval);
   if (!data.length) {
     try { data = await loadAlerts(); } catch (e) { error = e.message; }
   }
@@ -114,17 +112,6 @@ export async function renderAlerts({ alerts: initialAlerts = [], currentUser = {
   container.addEventListener("click", currentContainerHandler);
 
   renderContent();
-
-  alertsPollInterval = setInterval(async () => {
-    try {
-      const fresh = await loadAlerts();
-      if (JSON.stringify(fresh) !== JSON.stringify(data)) {
-        data = fresh;
-        renderContent();
-      }
-    } catch (_) {}
-  }, 3000);
-
   return root;
 }
 

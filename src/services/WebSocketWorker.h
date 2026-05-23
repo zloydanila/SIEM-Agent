@@ -49,6 +49,7 @@ private:
     bool validateMessage(const QJsonObject &json);
     bool checkRateLimit(const QString &ip);
     bool verifyHmac(const QJsonObject &json);
+    void broadcastJson(const QJsonObject &message, QWebSocket *except = nullptr);
     void processCorrelation(const Event &event);
 
     QWebSocketServer *m_server = nullptr;

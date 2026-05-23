@@ -1,6 +1,6 @@
 import { showToast } from "../components/toast.js";
 import { updateUser, deleteUser } from "../api.js";
-import { createModal, openModal, closeModal, setModalBody, setModalFooter, ensureModalHost } from "../components/modal.js";
+import { createModal, openModal, closeModal, setModalBody, setModalFooter, ensureModalHost, openConfirmModal } from "../components/modal.js";
 
 export function renderDashboard({
     stats = {},
@@ -10,11 +10,13 @@ export function renderDashboard({
     events = [],
     alerts = [],
     currentUser = {},
+    currentUserRole = "",
+    wsConnected = false,
     canManage = false,
     onRefresh
 } = {}) {
     const root = document.createElement("div");
-    root.className = "page-inner dashboard-page fade-in";
+    root.className = "page-inner dashboard-page";
 
     const safeActivity = Array.isArray(activity) ? activity : [];
     const safeTopDevices = Array.isArray(topDevices) ? topDevices : [];
@@ -22,6 +24,22 @@ export function renderDashboard({
 
     root.innerHTML = `
         <div class="dashboard-shell">
+            <section class="card dashboard-header-card">
+                <div class="card-body dashboard-header-body">
+                    <div class="dashboard-header-left">
+                        <div class="dashboard-brand-icon">S</div>
+                        <div>
+                            <div class="section-title">SIEM Dashboard</div>
+                            <div class="section-subtitle">${esc(currentUser.fullName || currentUser.username || "")}  |  ${esc(String(currentUserRole).toUpperCase())}</div>
+                        </div>
+                    </div>
+                    <div class="dashboard-header-actions">
+                        <span class="status-dot ${wsConnected ? "online" : "offline"}"></span>
+                        <span class="status-text ${wsConnected ? "online" : "offline"}">${wsConnected ? "Online" : "Offline"}</span>
+                        <button class="btn ghost" id="dashboardRefreshBtn">Refresh</button>
+                    </div>
+                </div>
+            </section>
             <section class="card">
                 <div class="card-body">
                     <div class="grid-kpis">
@@ -154,6 +172,8 @@ export function renderDashboard({
         if (canvas) drawDonut(canvas, stats);
     });
 
+    root.querySelector("#dashboardRefreshBtn")?.addEventListener("click", () => onRefresh?.());
+
     root.querySelectorAll("[data-edit]").forEach((btn) => {
         btn.addEventListener("click", () => {
             const user = safeUsers.find((u) => String(u.id) === btn.dataset.edit);
@@ -170,15 +190,16 @@ export function renderDashboard({
             return;
         }
 
-        btn.addEventListener("click", async () => {
-            if (!confirm(`Удалить пользователя "${name}"? Это действие необратимо.`)) return;
-            try {
-                await deleteUser(id);
-                showToast("Пользователь удалён", "success");
-                onRefresh?.();
-            } catch (e) {
-                showToast(e.message, "danger");
-            }
+        btn.addEventListener("click", () => {
+            openConfirmModal("Удалить пользователя?", `Удалить пользователя "${name}"? Это действие необратимо.`, async () => {
+                try {
+                    await deleteUser(id);
+                    showToast("Пользователь удалён", "success");
+                    onRefresh?.();
+                } catch (e) {
+                    showToast(e.message, "danger");
+                }
+            });
         });
     });
 
@@ -188,28 +209,33 @@ export function renderDashboard({
 function drawActivityChart(container, activity) {
     if (!container) return;
 
-    const now = new Date();
-    const buckets = [];
+    const buckets = Array.isArray(activity)
+        ? activity.map((item) => {
+            if (item && typeof item === "object") {
+                if (Object.prototype.hasOwnProperty.call(item, "hour")) {
+                    return {
+                        label: String(item.hour || ""),
+                        count: Number(item.count || 0)
+                    };
+                }
+                const raw = item.timestamp || item.time || item.triggeredAt || item.createdAt || item.date;
+                return {
+                    label: String(raw || ""),
+                    count: 1
+                };
+            }
+            return null;
+        }).filter(Boolean)
+        : [];
 
-    for (let i = 6; i >= 0; i--) {
-        const start = new Date(now);
-        start.setMinutes(0, 0, 0);
-        start.setHours(start.getHours() - i);
-
-        const end = new Date(start);
-        end.setHours(end.getHours() + 1);
-
-        const count = activity.filter(item => {
-            const raw = item.timestamp || item.time || item.triggeredAt || item.createdAt || item.date;
-            if (!raw) return false;
-            const t = new Date(raw);
-            return t >= start && t < end;
-        }).length;
-
-        buckets.push({
-            label: start.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-            count
-        });
+    if (!buckets.length) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-title">Нет данных активности</div>
+                <div>Активность появится после получения событий.</div>
+            </div>
+        `;
+        return;
     }
 
     const max = Math.max(1, ...buckets.map(b => b.count));

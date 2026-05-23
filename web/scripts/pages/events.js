@@ -3,7 +3,7 @@ import { showToast } from "../components/toast.js";
 
 export async function renderEvents({ events: initialEvents = [], onRefresh } = {}) {
   const root = document.createElement("div");
-  root.className = "page-inner fade-in";
+  root.className = "page-inner";
 
   let data = initialEvents;
   let error = null;

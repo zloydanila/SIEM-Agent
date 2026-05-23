@@ -1,11 +1,12 @@
 import { logout } from "../api.js";
 
 const MENU_ITEMS = [
-  { id: "dashboard", icon: "", label: "Дашборд" },
-  { id: "events", icon: "", label: "События" },
-  { id: "alerts", icon: "", label: "Алерты" },
-  { id: "rules", icon: "", label: "Правила" },
-  { id: "settings", icon: "", label: "Настройки" }
+  { id: "dashboard", icon: "D", label: "Дашборд" },
+  { id: "events", icon: "E", label: "События" },
+  { id: "alerts", icon: "A", label: "Алерты" },
+  { id: "rules", icon: "R", label: "Правила" },
+  { id: "users", icon: "U", label: "Пользователи" },
+  { id: "settings", icon: "S", label: "Настройки" }
 ];
 
 export function createSidebar({ active = "dashboard", currentUser = null, onNavigate } = {}) {
@@ -13,8 +14,15 @@ export function createSidebar({ active = "dashboard", currentUser = null, onNavi
   sidebar.className = "sidebar";
 
   const userName = currentUser?.fullName || currentUser?.username || "Пользователь";
-  const userRole = String(currentUser?.role || "");
+  const userRole = String(currentUser?.role || "").toLowerCase().trim();
   const firstLetter = (userName.charAt(0) || "U").toUpperCase();
+
+  const allowedItems = MENU_ITEMS.filter(item => {
+    if (userRole === "viewer") {
+      return !["users", "rules"].includes(item.id);
+    }
+    return true;
+  });
 
   sidebar.innerHTML = `
     <div class="sidebar-logo">
@@ -26,7 +34,7 @@ export function createSidebar({ active = "dashboard", currentUser = null, onNavi
     </div>
 
     <nav class="sidebar-nav">
-      ${MENU_ITEMS.map(item => `
+      ${allowedItems.map(item => `
         <button class="sidebar-item ${active === item.id ? "active" : ""}" data-nav="${item.id}">
           <span class="sidebar-item-icon">${item.icon}</span>
           <span>${item.label}</span>

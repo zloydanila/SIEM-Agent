@@ -1,10 +1,10 @@
 import { rules as loadRules, createRule, updateRule, deleteRule, toggleRule } from "../api.js";
 import { showToast } from "../components/toast.js";
-import { createModal, openModal, closeModal, setModalBody, setModalFooter, ensureModalHost } from "../components/modal.js";
+import { createModal, openModal, closeModal, setModalBody, setModalFooter, ensureModalHost, openConfirmModal } from "../components/modal.js";
 
 export async function renderRules({ rules: initialRules = [], currentUser = {}, canManage = false, onRefresh } = {}) {
   const root = document.createElement("div");
-  root.className = "page-inner fade-in";
+  root.className = "page-inner";
   let data = Array.isArray(initialRules) ? initialRules : [];
   let error = null;
 
@@ -83,17 +83,18 @@ export async function renderRules({ rules: initialRules = [], currentUser = {}, 
   });
 
   root.querySelectorAll("[data-del]").forEach(btn => {
-    btn.addEventListener("click", async () => {
+    btn.addEventListener("click", () => {
       const id = btn.dataset.del;
       const name = btn.dataset.name;
-      if (!confirm(`Удалить правило «${name}»? Это действие необратимо.`)) return;
-      try {
-        await deleteRule(id);
-        showToast("Правило удалено", "success");
-        onRefresh?.();
-      } catch (e) {
-        showToast(e.message, "danger");
-      }
+      openConfirmModal("Удалить правило?", `Удалить правило «${name}»? Это действие необратимо.`, async () => {
+        try {
+          await deleteRule(id);
+          showToast("Правило удалено", "success");
+          onRefresh?.();
+        } catch (e) {
+          showToast(e.message, "danger");
+        }
+      });
     });
   });
 

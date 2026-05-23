@@ -1,10 +1,10 @@
 import { users as loadUsers, createUser, updateUser, deleteUser } from "../api.js";
 import { showToast } from "../components/toast.js";
-import { createModal, ensureModalHost, setModalBody, setModalFooter, openModal, closeModal } from "../components/modal.js";
+import { createModal, ensureModalHost, setModalBody, setModalFooter, openModal, closeModal, openConfirmModal } from "../components/modal.js";
 
 export async function renderUsers({ users: initialUsers = [], currentUser = {}, onRefresh } = {}) {
   const root = document.createElement("div");
-  root.className = "page-inner fade-in";
+  root.className = "page-inner";
 
   let data = Array.isArray(initialUsers) ? initialUsers : [];
   let error = null;
@@ -76,17 +76,18 @@ export async function renderUsers({ users: initialUsers = [], currentUser = {}, 
   });
 
   root.querySelectorAll("[data-del-user]").forEach(btn => {
-    btn.addEventListener("click", async () => {
+    btn.addEventListener("click", () => {
       const id = btn.dataset.delUser;
       const user = data.find(u => String(u.id) === id);
-      if (!confirm(`Удалить пользователя "${user?.username || id}"?`)) return;
-      try {
-        await deleteUser(id);
-        showToast("Пользователь удалён", "success");
-        onRefresh?.();
-      } catch (e) {
-        showToast(e.message, "danger");
-      }
+      openConfirmModal("Удалить пользователя?", `Удалить пользователя "${user?.username || id}"? Это действие необратимо.`, async () => {
+        try {
+          await deleteUser(id);
+          showToast("Пользователь удалён", "success");
+          onRefresh?.();
+        } catch (e) {
+          showToast(e.message, "danger");
+        }
+      });
     });
   });
 

@@ -1,6 +1,6 @@
 import * as api from "../api.js";
 import { state } from "../state.js";
-import { navigate } from "../router.js";
+import { navigate, loadAllData } from "../router.js";
 import { showToast } from "../components/toast.js";
 
 export function renderLogin(root) {
@@ -53,6 +53,8 @@ export function renderLogin(root) {
       state.mustChangePassword = !!res?.mustChangePassword;
       state.isAuthenticated = true;
       state.currentUser = res?.user || null;
+
+      await loadAllData();
 
       if (res?.mustChangePassword) {
         navigate("settings");

@@ -898,11 +898,13 @@ QVariantList DatabaseService::getActivityLast7Hours() const {
     if (!m_opened) return out;
 
     const QDateTime nowLocal = QDateTime::currentDateTime();
-    const QDateTime nowUtc = nowLocal.toUTC();
+    const QDateTime currentHourLocal = QDateTime(nowLocal.date(), QTime(nowLocal.time().hour(), 0, 0), Qt::LocalTime);
 
     for (int i = 6; i >= 0; --i) {
-        const QDateTime fromUtc = nowUtc.addSecs(-i * 3600);
-        const QDateTime toUtc = fromUtc.addSecs(3599);
+        const QDateTime fromLocal = currentHourLocal.addSecs(-i * 3600);
+        const QDateTime toLocal = fromLocal.addSecs(3599);
+        const QDateTime fromUtc = fromLocal.toUTC();
+        const QDateTime toUtc = toLocal.toUTC();
 
         QSqlQuery q(database());
         q.prepare(R"(
@@ -917,7 +919,7 @@ QVariantList DatabaseService::getActivityLast7Hours() const {
         if (q.exec() && q.next()) count = q.value(0).toInt();
 
         QVariantMap m;
-        m["hour"] = fromUtc.toLocalTime().toString("hh:00");
+        m["hour"] = fromLocal.toString("hh:00");
         m["count"] = count;
         out.append(m);
     }
@@ -982,6 +984,7 @@ bool DatabaseService::pruneCorrelationHistory(int olderThanSeconds) {
     if (!q.exec()) { m_lastError = q.lastError().text(); return false; }
     return true;
 }
+
 
 bool DatabaseService::updateAlertStatus(const QString &alertId, const QString &newStatus) {
     QSqlDatabase db = database();

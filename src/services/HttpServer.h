@@ -97,6 +97,8 @@ private:
     void cleanupSessions();
     bool checkAuth(const QHash<QByteArray, QByteArray> &headers, QString *tokenOut = nullptr) const;
     bool checkAdmin(const QHash<QByteArray, QByteArray> &headers, QString *tokenOut = nullptr) const;
+    bool checkOperator(const QHash<QByteArray, QByteArray> &headers, QString *tokenOut = nullptr) const;
+    QString getRoleFromToken(const QString &token) const;
 
     QJsonObject dashboardJson() const;
     QJsonArray eventsJson(int limit) const;

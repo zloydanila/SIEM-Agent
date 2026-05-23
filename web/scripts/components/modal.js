@@ -9,15 +9,15 @@ export function ensureModalHost() {
   return host;
 }
 
-export function createModal({ id, title = "", width = "460px", modalClass = "", onClose = null } = {}) {
+export function createModal({ id, title = "", width = "460px", modalClass = "", onClose = null, isBlocking = false } = {}) {
   const overlay = document.createElement("div");
-  overlay.className = "modal-overlay";
+  overlay.className = "modal-overlay" + (isBlocking ? " blocking" : "");
   overlay.id = id;
   overlay.innerHTML = `
     <div class="modal ${modalClass}" style="width:${width};pointer-events:auto;">
       <div class="modal-header">
         <h3>${title}</h3>
-        <button class="modal-close" type="button" data-modal-close>×</button>
+        <button class="modal-close" type="button" data-modal-close ${isBlocking ? 'style="display:none;"' : ""}>×</button>
       </div>
       <div class="modal-body"></div>
       <div class="modal-footer"></div>
@@ -25,15 +25,17 @@ export function createModal({ id, title = "", width = "460px", modalClass = "", 
   `;
 
   overlay.addEventListener("click", e => {
-    if (e.target === overlay) {
+    if (e.target === overlay && !isBlocking) {
       closeModal(id);
       onClose?.();
     }
   });
 
   overlay.querySelector("[data-modal-close]")?.addEventListener("click", () => {
-    closeModal(id);
-    onClose?.();
+    if (!isBlocking) {
+      closeModal(id);
+      onClose?.();
+    }
   });
 
   return overlay;
@@ -70,4 +72,31 @@ export function setModalFooter(modal, html) {
   }
   const footer = modal.querySelector(".modal-footer");
   if (footer) footer.innerHTML = html;
+}
+
+export function openConfirmModal(title, message, onConfirm) {
+  ensureModalHost();
+  const modalId = `confirmModal_${Date.now()}`;
+  const modal = createModal({ id: modalId, title, width: "420px" });
+
+  setModalBody(modal, `
+    <div style="padding:12px;">
+      <p style="margin:0;color:var(--text-secondary);line-height:1.5;">${String(message)}</p>
+    </div>
+  `);
+
+  setModalFooter(modal, `
+    <button class="btn ghost" id="confirmCancel">Отмена</button>
+    <button class="btn danger" id="confirmOk">Подтвердить</button>
+  `);
+
+  ensureModalHost().appendChild(modal);
+
+  modal.querySelector("#confirmCancel")?.addEventListener("click", () => closeModal(modalId));
+  modal.querySelector("#confirmOk")?.addEventListener("click", async () => {
+    closeModal(modalId);
+    await onConfirm?.();
+  });
+
+  openModal(modalId);
 }

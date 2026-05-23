@@ -13,7 +13,7 @@ import {
   deleteRule,
   toggleRule
 } from "../api.js";
-import { createModal, openModal, closeModal, setModalBody, setModalFooter, ensureModalHost } from "../components/modal.js";
+import { createModal, openModal, closeModal, setModalBody, setModalFooter, ensureModalHost, openConfirmModal } from "../components/modal.js";
 
 export async function renderSettings({
   mustChangePassword = false,
@@ -23,7 +23,7 @@ export async function renderSettings({
   onRefresh
 } = {}) {
   const root = document.createElement("div");
-  root.className = "page-inner fade-in";
+  root.className = "page-inner";
 
   let rulesData = Array.isArray(initialRules) ? initialRules : [];
   let data = { totalEvents: 0, totalAlerts: 0 };
@@ -39,25 +39,7 @@ export async function renderSettings({
     try { rulesData = await loadRules(); } catch (_) {}
   }
 
-  if (mustChangePassword) {
-    root.innerHTML = `
-      <section class="page-section">
-        <div class="page-hero">
-          <div>
-            <h2>Требуется смена пароля</h2>
-            <p>Первый вход требует смены пароля перед доступом к системе.</p>
-          </div>
-        </div>
-        <div class="card">
-          <div class="card-body">
-            <button class="btn primary" id="forceChangePwBtn">Сменить пароль</button>
-          </div>
-        </div>
-      </section>
-    `;
-    root.querySelector("#forceChangePwBtn")?.addEventListener("click", () => openChangePasswordModal(true, onRefresh));
-    return root;
-  }
+  const forcedPasswordNotice = mustChangePassword ? `<div class="page-note" style="border-color:var(--warning);color:var(--warning);margin-top:16px;">Требуется смена пароля. Сначала обновите пароль, чтобы продолжить работу.</div>` : "";
 
   root.innerHTML = `
     <section class="page-section">
@@ -68,6 +50,7 @@ export async function renderSettings({
         </div>
         ${!canManage ? `<div class="role-badge">Только просмотр</div>` : ""}
       </div>
+      ${forcedPasswordNotice}
 
       <div class="two-col">
         <div class="content-gap">
@@ -141,24 +124,30 @@ export async function renderSettings({
     </section>
   `;
 
-  root.querySelector("#changePwBtn")?.addEventListener("click", () => openChangePasswordModal(false, onRefresh));
+  root.querySelector("#changePwBtn")?.addEventListener("click", () => openChangePasswordModal(mustChangePassword, onRefresh));
 
-  root.querySelector("#clearEventsBtn")?.addEventListener("click", async () => {
-    if (!confirm("Очистить все события? Это действие необратимо!")) return;
-    try {
-      await clearEvents();
-      showToast("События очищены", "success");
-      root.querySelector("#dbEvents").textContent = "0";
-    } catch (e) { showToast(e.message, "danger"); }
+  if (mustChangePassword && !document.getElementById("changePwModal")) {
+    requestAnimationFrame(() => openChangePasswordModal(true, onRefresh));
+  }
+
+  root.querySelector("#clearEventsBtn")?.addEventListener("click", () => {
+    openConfirmModal("Очистить события?", "Это действие необратимо - все события будут удалены из базы данных.", async () => {
+      try {
+        await clearEvents();
+        showToast("События очищены", "success");
+        root.querySelector("#dbEvents").textContent = "0";
+      } catch (e) { showToast(e.message, "danger"); }
+    });
   });
 
-  root.querySelector("#clearAlertsBtn")?.addEventListener("click", async () => {
-    if (!confirm("Очистить все алерты? Это действие необратимо!")) return;
-    try {
-      await clearAlerts();
-      showToast("Алерты очищены", "success");
-      root.querySelector("#dbAlerts").textContent = "0";
-    } catch (e) { showToast(e.message, "danger"); }
+  root.querySelector("#clearAlertsBtn")?.addEventListener("click", () => {
+    openConfirmModal("Очистить алерты?", "Это действие необратимо - все алерты будут удалены из базы данных.", async () => {
+      try {
+        await clearAlerts();
+        showToast("Алерты очищены", "success");
+        root.querySelector("#dbAlerts").textContent = "0";
+      } catch (e) { showToast(e.message, "danger"); }
+    });
   });
 
   root.querySelector("#expEventsBtn")?.addEventListener("click", async () => {
@@ -241,13 +230,18 @@ function downloadBlob(blob, filename) {
 function openChangePasswordModal(mustChangePasswordNow = false, onSuccess) {
   ensureModalHost();
   const modalId = "changePwModal";
-  const modal = createModal({ id: modalId, title: "Смена пароля", width: "440px" });
+  const modal = createModal({ 
+    id: modalId, 
+    title: "Смена пароля", 
+    width: "440px",
+    isBlocking: mustChangePasswordNow 
+  });
 
   setModalBody(modal, `
     <div class="form-grid">
       <div class="form-group">
-        <label class="form-label">ТЕКУЩИЙ ПАРОЛЬ</label>
-        <input class="input" type="password" id="pwCurrent" />
+        <label class="form-label">${mustChangePasswordNow ? 'ВХОД ЗАБЛОКИРОВАН' : 'ТЕКУЩИЙ ПАРОЛЬ'}</label>
+        ${mustChangePasswordNow ? '<div style="padding:12px;background:var(--bg-secondary);border-radius:var(--radius-small);color:var(--text-secondary);font-size:var(--font-sm);margin-bottom:12px;">Вы должны сменить пароль перед использованием системы. Это требуемая операция.</div>' : '<input class="input" type="password" id="pwCurrent" />'}
       </div>
       <div class="form-group">
         <label class="form-label">НОВЫЙ ПАРОЛЬ</label>
@@ -262,24 +256,22 @@ function openChangePasswordModal(mustChangePasswordNow = false, onSuccess) {
   `);
 
   setModalFooter(modal, `
-    <button class="btn ghost" id="pwCancelBtn">Отмена</button>
-    <button class="btn primary" id="pwSaveBtn">Сменить пароль</button>
+    ${!mustChangePasswordNow ? '<button class="btn ghost" id="pwCancelBtn">Отмена</button>' : ''}
+    <button class="btn primary" id="pwSaveBtn" style="${mustChangePasswordNow ? 'width:100%;' : ''}">Сменить пароль</button>
   `);
 
   ensureModalHost().appendChild(modal);
 
-  const cancelBtn = modal.querySelector("#pwCancelBtn");
   const saveBtn = modal.querySelector("#pwSaveBtn");
-  if (!cancelBtn || !saveBtn) return;
+  const cancelBtn = modal.querySelector("#pwCancelBtn");
+  if (!saveBtn) return;
 
-  if (mustChangePasswordNow) {
-    cancelBtn.style.display = "none";
-  } else {
+  if (cancelBtn) {
     cancelBtn.addEventListener("click", () => closeModal(modalId));
   }
 
   saveBtn.addEventListener("click", async () => {
-    const currentPassword = modal.querySelector("#pwCurrent").value.trim();
+    const currentPassword = mustChangePasswordNow ? "" : (modal.querySelector("#pwCurrent").value.trim());
     const newPassword = modal.querySelector("#pwNew").value.trim();
     const confirmPassword = modal.querySelector("#pwConfirm").value.trim();
     const errBox = modal.querySelector("#pwError");
@@ -303,6 +295,16 @@ function openChangePasswordModal(mustChangePasswordNow = false, onSuccess) {
   });
 
   openModal(modalId);
+
+  // Блокировка Escape при обязательной смене
+  if (mustChangePasswordNow) {
+    const handleEscape = (e) => {
+      if (e.key === "Escape") e.preventDefault();
+    };
+    document.addEventListener("keydown", handleEscape);
+    const cleanup = () => document.removeEventListener("keydown", handleEscape);
+    modal.addEventListener("remove", cleanup);
+  }
 }
 
 function openRuleModal(rule, onRefresh) {
@@ -448,6 +450,33 @@ function renderRulesList(rules, canManage, currentUser) {
         </div>` : ""}
     </div>
   `).join("");
+}
+
+function openConfirmModal(title, message, onConfirm) {
+  ensureModalHost();
+  const modalId = "confirmModal_" + Date.now();
+  const modal = createModal({ id: modalId, title: title, width: "420px" });
+
+  setModalBody(modal, `
+    <div style="padding:12px 0;">
+      <p style="color:var(--text-secondary);margin:0;line-height:1.5;">${message}</p>
+    </div>
+  `);
+
+  setModalFooter(modal, `
+    <button class="btn ghost" id="confirmCancel">Отмена</button>
+    <button class="btn danger" id="confirmOk">Подтвердить</button>
+  `);
+
+  ensureModalHost().appendChild(modal);
+
+  modal.querySelector("#confirmCancel")?.addEventListener("click", () => closeModal(modalId));
+  modal.querySelector("#confirmOk")?.addEventListener("click", async () => {
+    closeModal(modalId);
+    await onConfirm?.();
+  });
+
+  openModal(modalId);
 }
 
 function showErr(el, text) {

@@ -163,6 +163,7 @@ void WebSocketWorker::onTextMessageReceived(const QString &message) {
 
     if (m_dbService && m_dbService->createEvent(event)) {
         emit eventReceived();
+        broadcastJson(QJsonObject{{"type", "event"}, {"payload", event.toJson()}}, client);
         processCorrelation(event);
     }
 }
@@ -219,6 +220,16 @@ bool WebSocketWorker::verifyHmac(const QJsonObject &json) {
     return true;
 }
 
+void WebSocketWorker::broadcastJson(const QJsonObject &message, QWebSocket *except) {
+    if (!m_server) return;
+    const QJsonDocument doc(message);
+    const QString text = QString::fromUtf8(doc.toJson(QJsonDocument::Compact));
+    for (QWebSocket *socket : qAsConst(m_clients)) {
+        if (!socket || socket == except) continue;
+        socket->sendTextMessage(text);
+    }
+}
+
 void WebSocketWorker::processCorrelation(const Event &event) {
     if (!m_dbService) return;
 
@@ -238,6 +249,7 @@ void WebSocketWorker::processCorrelation(const Event &event) {
 
         if (m_dbService->createAlert(alert)) {
             emit alertReceived();
+            broadcastJson(QJsonObject{{"type", "alert"}, {"payload", alert.toJson()}});
         }
     }
 
@@ -280,6 +292,7 @@ void WebSocketWorker::processCorrelation(const Event &event) {
 
         if (m_dbService->createAlert(alert)) {
             emit alertReceived();
+            broadcastJson(QJsonObject{{"type", "alert"}, {"payload", alert.toJson()}});
         }
     }
 }

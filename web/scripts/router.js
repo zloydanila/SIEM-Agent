@@ -1,7 +1,6 @@
 import { state, subscribe, setState, setUser, setDashboard, clearSession } from "./state.js";
 import { isAuthenticated, me, logout, dashboard, users, events, alerts, rules, status } from "./api.js";
 import { createSidebar } from "./components/sidebar.js";
-import { createHeader } from "./components/header.js";
 import { renderLogin } from "./pages/login.js";
 import { renderDashboard } from "./pages/dashboard.js";
 import { renderEvents } from "./pages/events.js";
@@ -14,34 +13,58 @@ const pages = { dashboard: renderDashboard, events: renderEvents, alerts: render
 
 let root = null;
 let wsCheckInterval = null;
-let dataRefreshInterval = null;
+let autoRefreshInterval = null;
 let visibilityHandler = null;
 let shellEl = null;
 let sidebarEl = null;
 let mainEl = null;
-let headerEl = null;
 let pageContainerEl = null;
 let renderQueued = false;
 let lastRenderedPage = "";
 let lastRenderedVersion = -1;
+let wsSocket = null;
+let wsReconnectTimer = null;
+let currentWsUrl = "";
 
 export function initRouter(selector = "#app") {
   root = document.querySelector(selector);
   if (!root) throw new Error(`Root element not found: ${selector}`);
 
   subscribe(scheduleRender);
+  subscribe(handleWebSocketStateChange);
+  subscribe(handleAutoRefresh);
 
   if (isAuthenticated()) loadUserAndData();
   else renderLoginPage();
 
   if (!wsCheckInterval) wsCheckInterval = setInterval(pollStatus, 5000);
-  if (!dataRefreshInterval) dataRefreshInterval = setInterval(refreshDataSilently, 3000);
 
   if (!visibilityHandler) {
     visibilityHandler = () => {
       if (!document.hidden && state.isAuthenticated) loadAllData().then(scheduleRender);
     };
     document.addEventListener("visibilitychange", visibilityHandler);
+  }
+}
+
+function handleAutoRefresh(currentState) {
+  if (!currentState.isAuthenticated) {
+    if (autoRefreshInterval) {
+      clearInterval(autoRefreshInterval);
+      autoRefreshInterval = null;
+    }
+    return;
+  }
+
+  if (!autoRefreshInterval && currentState.page !== "settings") {
+    autoRefreshInterval = setInterval(async () => {
+      if (!state.isAuthenticated || state.page === "settings") {
+        clearInterval(autoRefreshInterval);
+        autoRefreshInterval = null;
+        return;
+      }
+      await loadAllData();
+    }, 10000);
   }
 }
 
@@ -57,7 +80,7 @@ function scheduleRender() {
 function renderLoginPage() {
   if (!root) return;
   root.innerHTML = "";
-  shellEl = sidebarEl = mainEl = headerEl = pageContainerEl = null;
+  shellEl = sidebarEl = mainEl = pageContainerEl = null;
   lastRenderedPage = "";
   lastRenderedVersion = -1;
   renderLogin(root);
@@ -74,11 +97,9 @@ function ensureShell() {
   sidebarEl = document.createElement("div");
   mainEl = document.createElement("div");
   mainEl.className = "main";
-  headerEl = document.createElement("div");
   pageContainerEl = document.createElement("div");
   pageContainerEl.className = "page";
 
-  mainEl.appendChild(headerEl);
   mainEl.appendChild(pageContainerEl);
   shellEl.appendChild(sidebarEl);
   shellEl.appendChild(mainEl);
@@ -89,6 +110,7 @@ async function loadUserAndData() {
   try {
     const user = await me();
     setUser(user);
+    setState({ mustChangePassword: !!user?.mustChangePassword });
     await loadAllData();
     scheduleRender();
   } catch (_) {
@@ -110,23 +132,123 @@ async function pollStatus() {
   } catch (_) {}
 }
 
-async function refreshDataSilently() {
-  if (!state.isAuthenticated || document.hidden) return;
-  try {
-    const [eventsData, alertsData, dashData] = await Promise.allSettled([events(), alerts(), dashboard()]);
-    if (eventsData.status === "fulfilled") setState({ events: eventsData.value || [] });
-    if (alertsData.status === "fulfilled") setState({ alerts: alertsData.value || [] });
-    if (dashData.status === "fulfilled") {
-      const d = dashData.value || {};
-      setDashboard({
-        stats: d.stats || {},
-        activity: Array.isArray(d.stats?.activity) ? d.stats.activity : [],
-        topDevices: Array.isArray(d.stats?.topDevices) ? d.stats.topDevices : [],
-        recentEvents: Array.isArray(d.recentEvents) ? d.recentEvents : [],
-        alerts: Array.isArray(d.alerts) ? d.alerts : []
-      });
+function getWebSocketUrl() {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const host = window.location.hostname || window.location.host;
+  const port = state.wsPort || 8080;
+  return `${protocol}//${host}:${port}`;
+}
+
+function closeWebSocket() {
+  if (wsSocket) {
+    wsSocket.removeEventListener("open", handleWebSocketOpen);
+    wsSocket.removeEventListener("message", handleWebSocketMessage);
+    wsSocket.removeEventListener("close", handleWebSocketClose);
+    wsSocket.removeEventListener("error", handleWebSocketError);
+    wsSocket.close();
+    wsSocket = null;
+  }
+  if (wsReconnectTimer) {
+    clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = null;
+  }
+  currentWsUrl = "";
+}
+
+function scheduleWebSocketReconnect() {
+  if (wsReconnectTimer) return;
+  wsReconnectTimer = setTimeout(() => {
+    wsReconnectTimer = null;
+    if (state.isAuthenticated && state.wsConnected) {
+      createWebSocket();
     }
-  } catch (_) {}
+  }, 2500);
+}
+
+function createWebSocket() {
+  if (!state.isAuthenticated || !state.wsConnected) {
+    closeWebSocket();
+    return;
+  }
+
+  const url = getWebSocketUrl();
+  if (wsSocket && currentWsUrl === url && (wsSocket.readyState === WebSocket.OPEN || wsSocket.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+
+  closeWebSocket();
+
+  currentWsUrl = url;
+  try {
+    wsSocket = new WebSocket(url);
+  } catch (e) {
+    scheduleWebSocketReconnect();
+    return;
+  }
+
+  wsSocket.addEventListener("open", handleWebSocketOpen);
+  wsSocket.addEventListener("message", handleWebSocketMessage);
+  wsSocket.addEventListener("close", handleWebSocketClose);
+  wsSocket.addEventListener("error", handleWebSocketError);
+}
+
+function handleWebSocketOpen() {
+  console.debug("WebSocket connected", currentWsUrl);
+}
+
+function handleWebSocketError() {
+  console.debug("WebSocket error", currentWsUrl);
+}
+
+function handleWebSocketClose() {
+  wsSocket = null;
+  scheduleWebSocketReconnect();
+}
+
+function handleWebSocketMessage(event) {
+  let data;
+  try {
+    data = JSON.parse(event.data);
+  } catch (err) {
+    return;
+  }
+  if (!data || typeof data !== "object") return;
+
+  const type = String(data.type || "").toLowerCase();
+  const payload = data.payload || data;
+
+  if (type === "event" || (payload && payload.eventType && payload.deviceName)) {
+    const eventItem = { ...payload };
+    const updatedEvents = [eventItem, ...(state.events || [])].slice(0, 100);
+    const updatedRecent = [eventItem, ...(state.dashboard?.recentEvents || [])].slice(0, 10);
+    setState({ events: updatedEvents });
+    setDashboard({ recentEvents: updatedRecent, stats: updatedDashboardStatsForEvent(eventItem) });
+    return;
+  }
+
+  if (type === "alert" || (payload && payload.title && payload.status)) {
+    const alertItem = { ...payload };
+    setState({ alerts: [alertItem, ...(state.alerts || [])].slice(0, 100) });
+  }
+}
+
+function updatedDashboardStatsForEvent(eventItem) {
+  const stats = { ...(state.dashboard?.stats || {}) };
+  stats.totalEvents = (Number(stats.totalEvents) || 0) + 1;
+  const severity = String(eventItem.severity || "").toLowerCase();
+  if (severity === "critical") stats.criticalCount = (Number(stats.criticalCount) || 0) + 1;
+  else if (severity === "high") stats.highCount = (Number(stats.highCount) || 0) + 1;
+  else if (severity === "medium") stats.mediumCount = (Number(stats.mediumCount) || 0) + 1;
+  else if (severity === "low") stats.lowCount = (Number(stats.lowCount) || 0) + 1;
+  return stats;
+}
+
+function handleWebSocketStateChange(currentState) {
+  if (!currentState.isAuthenticated || !currentState.wsConnected) {
+    closeWebSocket();
+    return;
+  }
+  createWebSocket();
 }
 
 export async function loadAllData() {
@@ -189,22 +311,6 @@ function renderCurrentPage() {
     sidebarEl = shellEl.firstChild;
   }
 
-  if (headerEl) {
-    headerEl.replaceWith(createHeader({
-      currentUserName: user.fullName || user.username || "admin",
-      currentUserRole: userRole,
-      wsConnected: state.wsConnected,
-      canManage,
-      onRefresh: loadAllData,
-      onLogout: async () => {
-        await logout();
-        clearSession();
-        renderLoginPage();
-      }
-    }));
-    headerEl = mainEl.firstChild;
-  }
-
   const key = `${state.page}:${state.dataVersion}`;
   if (key === lastRenderedPage) return;
   lastRenderedPage = key;
@@ -250,7 +356,8 @@ function buildPageProps(page, { user, canManage, isAdmin, userRole }) {
         topDevices: state.dashboard?.topDevices || [],
         users: state.users || [],
         events: state.events || [],
-        alerts: state.alerts || []
+        alerts: state.alerts || [],
+        wsConnected: state.wsConnected || false
       };
     case "events":
       return { ...base, events: state.events || [] };

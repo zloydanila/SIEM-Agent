@@ -92,7 +92,7 @@
 .sidebar-item.active {
   background: rgba(88, 166, 255, 0.12);
   color: var(--accent);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .sidebar-item.active::before {
@@ -177,7 +177,7 @@
 .sidebar-logout:hover {
   background: var(--bg-tertiary);
   border-color: var(--border);
-  color: var(--danger);
+  color: var(--text-primary);
 }
 
 /* ── Main area ───────────────────────────────────────────── */
