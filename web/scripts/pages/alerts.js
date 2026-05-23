@@ -2,9 +2,13 @@ import { alerts as loadAlerts, updateAlertStatus } from "../api.js";
 import { showToast } from "../components/toast.js";
 import { state, setAlertsFilter } from "../state.js";
 
-let currentContainerHandler = null;
-
-export async function renderAlerts({ alerts: initialAlerts = [], currentUser = {}, canManage = false, onRefresh, alertsFilter = "" } = {}) {
+export async function renderAlerts({
+  alerts: initialAlerts = [],
+  currentUser = {},
+  canUpdateAlertStatus = false,
+  onRefresh,
+  alertsFilter = ""
+} = {}) {
   const root = document.createElement("div");
   root.className = "page-inner";
 
@@ -13,15 +17,23 @@ export async function renderAlerts({ alerts: initialAlerts = [], currentUser = {
   let activeFilter = alertsFilter || state.alertsFilter || "";
 
   if (!data.length) {
-    try { data = await loadAlerts(); } catch (e) { error = e.message; }
+    try {
+      data = await loadAlerts();
+    } catch (e) {
+      error = e.message;
+    }
   }
 
   root.innerHTML = `
     <section class="page-section">
       <div class="page-hero">
-        <div><h2>Алерты</h2><p id="alertsCount">Всего: ${data.length}</p></div>
+        <div>
+          <h2>Алерты</h2>
+          <p id="alertsCount">Всего: ${data.length}</p>
+        </div>
+
         <div class="page-actions">
-          ${!canManage ? `<div class="role-badge">Только просмотр</div>` : ""}
+          ${!canUpdateAlertStatus ? `<div class="role-badge">Только просмотр</div>` : ""}
           <div class="filter-pills">
             <button class="filter-pill ${activeFilter === "" ? "active" : ""}" data-filter="">Все</button>
             <button class="filter-pill ${activeFilter === "open" ? "active" : ""}" data-filter="open">Открытые</button>
@@ -30,7 +42,9 @@ export async function renderAlerts({ alerts: initialAlerts = [], currentUser = {
           </div>
         </div>
       </div>
+
       ${error ? `<div class="page-note" style="border-color:var(--danger);color:var(--danger);">Ошибка: ${esc(error)}</div>` : ""}
+
       <div id="alertsContainer" class="content-gap"></div>
     </section>
   `;
@@ -38,14 +52,35 @@ export async function renderAlerts({ alerts: initialAlerts = [], currentUser = {
   const container = root.querySelector("#alertsContainer");
 
   function filtered() {
-    return activeFilter ? data.filter(a => String(a.status || "").toLowerCase() === activeFilter) : data;
+    return activeFilter
+      ? data.filter(a => String(a.status || "").toLowerCase() === activeFilter)
+      : data;
   }
 
   function renderContent() {
     const list = filtered();
+
     container.innerHTML = list.length
       ? list.map(al => {
           const status = String(al.status || "").toLowerCase();
+
+          const actions = canUpdateAlertStatus
+            ? status === "open"
+              ? `
+                <div class="alert-card-actions">
+                  <button class="alert-action-btn warning" data-id="${al.id}" data-action="investigate">Взять в работу</button>
+                  <button class="alert-action-btn success" data-id="${al.id}" data-action="close">Закрыть</button>
+                </div>
+              `
+              : status === "investigating"
+                ? `
+                  <div class="alert-card-actions">
+                    <button class="alert-action-btn success" data-id="${al.id}" data-action="close">Закрыть</button>
+                  </div>
+                `
+                : ""
+            : "";
+
           return `
             <div class="alert-card">
               <div class="alert-severity-bar" style="background:${sevColor(al.severity)};"></div>
@@ -55,20 +90,13 @@ export async function renderAlerts({ alerts: initialAlerts = [], currentUser = {
                   <span class="badge ${sevBadgeClass(al.severity)}">${sevLabel(al.severity)}</span>
                   <span class="badge ${statusBadgeClass(al.status)}">${statusLabel(al.status)}</span>
                 </div>
+
                 <div class="alert-card-desc">${esc(al.description || "")}</div>
+
                 <div class="alert-card-meta">
                   <span>Устройство: ${esc(al.deviceName || al.device || "—")}</span>
                   <span>Время: ${esc(formatTime(al.triggeredAt || al.time || ""))}</span>
-                  ${canManage && status === "open"
-                    ? `<div class="alert-card-actions">
-                        <button class="alert-action-btn warning" data-id="${al.id}" data-action="investigate">Взять в работу</button>
-                        <button class="alert-action-btn success" data-id="${al.id}" data-action="close">Закрыть</button>
-                      </div>`
-                    : canManage && status === "investigating"
-                      ? `<div class="alert-card-actions">
-                          <button class="alert-action-btn success" data-id="${al.id}" data-action="close">Закрыть</button>
-                        </div>`
-                      : ""}
+                  ${actions}
                 </div>
               </div>
             </div>
@@ -76,23 +104,26 @@ export async function renderAlerts({ alerts: initialAlerts = [], currentUser = {
         }).join("")
       : `<div class="empty-state"><div class="empty-state-title">${activeFilter ? "Нет алертов с таким статусом" : "Алертов нет"}</div></div>`;
 
-    root.querySelector("#alertsCount").textContent = `Всего: ${data.length}${activeFilter ? " · показано: " + list.length : ""}`;
+    root.querySelector("#alertsCount").textContent =
+      `Всего: ${data.length}${activeFilter ? " · показано: " + list.length : ""}`;
   }
 
   root.querySelectorAll("[data-filter]").forEach(btn => {
     btn.addEventListener("click", () => {
       activeFilter = btn.dataset.filter;
       setAlertsFilter(activeFilter);
-      root.querySelectorAll("[data-filter]").forEach(b => b.classList.toggle("active", b.dataset.filter === activeFilter));
+
+      root.querySelectorAll("[data-filter]").forEach(b => {
+        b.classList.toggle("active", b.dataset.filter === activeFilter);
+      });
+
       renderContent();
     });
   });
 
-  if (currentContainerHandler) container.removeEventListener("click", currentContainerHandler);
-
-  currentContainerHandler = e => {
+  container.addEventListener("click", e => {
     const btn = e.target.closest("[data-action]");
-    if (!btn) return;
+    if (!btn || !canUpdateAlertStatus) return;
 
     const id = btn.dataset.id;
     const action = btn.dataset.action;
@@ -102,14 +133,12 @@ export async function renderAlerts({ alerts: initialAlerts = [], currentUser = {
       try {
         await updateAlertStatus(id, newStatus);
         showToast(action === "close" ? "Алерт закрыт" : "Алерт взят в работу", "success");
-        onRefresh?.();
+        await onRefresh?.();
       } catch (err) {
         showToast(err.message, "danger");
       }
     })();
-  };
-
-  container.addEventListener("click", currentContainerHandler);
+  });
 
   renderContent();
   return root;
@@ -159,5 +188,9 @@ function formatTime(ts) {
 }
 
 function esc(v) {
-  return String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  return String(v ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }

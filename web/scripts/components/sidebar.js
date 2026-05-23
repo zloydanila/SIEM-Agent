@@ -9,20 +9,34 @@ const MENU_ITEMS = [
   { id: "settings", icon: "S", label: "Настройки" }
 ];
 
+function getUserRole(user) {
+  return String(user?.role || user?.user?.role || "").toLowerCase().trim();
+}
+
+function roleLabel(role) {
+  if (role === "admin") return "Администратор";
+  if (role === "operator") return "Оператор";
+  if (role === "viewer") return "Наблюдатель";
+  return "Пользователь";
+}
+
+function canAccessItem(role, itemId) {
+  if (role === "admin") return true;
+  if (role === "operator" || role === "viewer") {
+    return !["users", "rules"].includes(itemId);
+  }
+  return !["users", "rules"].includes(itemId);
+}
+
 export function createSidebar({ active = "dashboard", currentUser = null, onNavigate } = {}) {
   const sidebar = document.createElement("aside");
   sidebar.className = "sidebar";
 
   const userName = currentUser?.fullName || currentUser?.username || "Пользователь";
-  const userRole = String(currentUser?.role || "").toLowerCase().trim();
+  const userRole = getUserRole(currentUser);
   const firstLetter = (userName.charAt(0) || "U").toUpperCase();
 
-  const allowedItems = MENU_ITEMS.filter(item => {
-    if (userRole === "viewer") {
-      return !["users", "rules"].includes(item.id);
-    }
-    return true;
-  });
+  const allowedItems = MENU_ITEMS.filter(item => canAccessItem(userRole, item.id));
 
   sidebar.innerHTML = `
     <div class="sidebar-logo">
@@ -46,7 +60,7 @@ export function createSidebar({ active = "dashboard", currentUser = null, onNavi
       <div class="sidebar-avatar">${firstLetter}</div>
       <div class="sidebar-user-info">
         <div class="sidebar-user-name">${esc(userName)}</div>
-        <div class="sidebar-user-role">${esc(userRole)}</div>
+        <div class="sidebar-user-role">${esc(roleLabel(userRole))}</div>
       </div>
       <button class="sidebar-logout" id="sidebarLogout" title="Выход">→</button>
     </div>
@@ -57,7 +71,7 @@ export function createSidebar({ active = "dashboard", currentUser = null, onNavi
   });
 
   sidebar.querySelector("#sidebarLogout")?.addEventListener("click", async () => {
-    await logout();
+    await logout().catch(() => {});
     window.location.reload();
   });
 
@@ -65,5 +79,9 @@ export function createSidebar({ active = "dashboard", currentUser = null, onNavi
 }
 
 function esc(v) {
-  return String(v || "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  return String(v || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }

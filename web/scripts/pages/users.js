@@ -1,17 +1,51 @@
 import { users as loadUsers, createUser, updateUser, deleteUser } from "../api.js";
 import { showToast } from "../components/toast.js";
-import { createModal, ensureModalHost, setModalBody, setModalFooter, openModal, closeModal, openConfirmModal } from "../components/modal.js";
+import {
+  createModal,
+  ensureModalHost,
+  setModalBody,
+  setModalFooter,
+  openModal,
+  closeModal,
+  openConfirmModal
+} from "../components/modal.js";
 
-export async function renderUsers({ users: initialUsers = [], currentUser = {}, onRefresh } = {}) {
+export async function renderUsers({
+  users: initialUsers = [],
+  currentUser = {},
+  canAccessUsers = false,
+  isAdmin = false,
+  onRefresh
+} = {}) {
   const root = document.createElement("div");
   root.className = "page-inner";
 
+  if (!canAccessUsers) {
+    root.innerHTML = `
+      <section class="page-section">
+        <div class="page-hero">
+          <div>
+            <h2>Пользователи</h2>
+            <p>Раздел недоступен для вашей роли</p>
+          </div>
+        </div>
+        <div class="page-note" style="border-color:var(--warning);color:var(--warning);">
+          Доступ к управлению пользователями есть только у администратора.
+        </div>
+      </section>
+    `;
+    return root;
+  }
+
   let data = Array.isArray(initialUsers) ? initialUsers : [];
   let error = null;
-  const isAdmin = String(currentUser.role || "").toLowerCase() === "admin";
 
   if (!data.length) {
-    try { data = await loadUsers(); } catch (e) { error = e.message; }
+    try {
+      data = await loadUsers();
+    } catch (e) {
+      error = e.message;
+    }
   }
 
   root.innerHTML = `
@@ -22,8 +56,8 @@ export async function renderUsers({ users: initialUsers = [], currentUser = {}, 
           <p>${data.length} пользователей</p>
         </div>
         <div class="page-actions">
-          <button class="btn ghost" id="usersRefreshBtn">Refresh</button>
-          ${isAdmin ? `<button class="btn success" id="addUserBtn">+ Add User</button>` : ""}
+          <button class="btn ghost" id="usersRefreshBtn">Обновить</button>
+          ${isAdmin ? `<button class="btn success" id="addUserBtn">+ Добавить пользователя</button>` : ""}
         </div>
       </div>
 
@@ -53,7 +87,7 @@ export async function renderUsers({ users: initialUsers = [], currentUser = {}, 
                   <td>
                     ${isAdmin ? `
                       <button class="btn mini ghost" data-edit-user="${u.id}">Edit</button>
-                      <button class="btn mini danger" data-del-user="${u.id}">Delete</button>
+                      ${String(u.id) === String(currentUser?.id) ? `<span class="badge muted">Self</span>` : `<button class="btn mini danger" data-del-user="${u.id}">Delete</button>`}
                     ` : "—"}
                   </td>
                 </tr>
@@ -65,11 +99,18 @@ export async function renderUsers({ users: initialUsers = [], currentUser = {}, 
     </section>
   `;
 
-  root.querySelector("#usersRefreshBtn")?.addEventListener("click", () => onRefresh?.());
-  root.querySelector("#addUserBtn")?.addEventListener("click", () => openUserModal(null, onRefresh));
+  root.querySelector("#usersRefreshBtn")?.addEventListener("click", async () => {
+    await onRefresh?.();
+  });
+
+  root.querySelector("#addUserBtn")?.addEventListener("click", () => {
+    if (!isAdmin) return;
+    openUserModal(null, onRefresh);
+  });
 
   root.querySelectorAll("[data-edit-user]").forEach(btn => {
     btn.addEventListener("click", () => {
+      if (!isAdmin) return;
       const user = data.find(u => String(u.id) === btn.dataset.editUser);
       if (user) openUserModal(user, onRefresh);
     });
@@ -77,17 +118,23 @@ export async function renderUsers({ users: initialUsers = [], currentUser = {}, 
 
   root.querySelectorAll("[data-del-user]").forEach(btn => {
     btn.addEventListener("click", () => {
+      if (!isAdmin) return;
       const id = btn.dataset.delUser;
       const user = data.find(u => String(u.id) === id);
-      openConfirmModal("Удалить пользователя?", `Удалить пользователя "${user?.username || id}"? Это действие необратимо.`, async () => {
-        try {
-          await deleteUser(id);
-          showToast("Пользователь удалён", "success");
-          onRefresh?.();
-        } catch (e) {
-          showToast(e.message, "danger");
+
+      openConfirmModal(
+        "Удалить пользователя?",
+        `Удалить пользователя "${esc(user?.username || id)}"? Это действие необратимо.`,
+        async () => {
+          try {
+            await deleteUser(id);
+            showToast("Пользователь удалён", "success");
+            await onRefresh?.();
+          } catch (e) {
+            showToast(e.message, "danger");
+          }
         }
-      });
+      );
     });
   });
 
@@ -96,9 +143,14 @@ export async function renderUsers({ users: initialUsers = [], currentUser = {}, 
 
 function openUserModal(user, onRefresh) {
   ensureModalHost();
+
   const isEdit = !!user;
+  const modalId = isEdit ? "editUserModal" : "addUserModal";
+  const existing = document.getElementById(modalId);
+  if (existing) existing.remove();
+
   const modal = createModal({
-    id: isEdit ? "editUserModal" : "addUserModal",
+    id: modalId,
     title: isEdit ? "Редактировать пользователя" : "Создать пользователя",
     width: "460px"
   });
@@ -109,14 +161,17 @@ function openUserModal(user, onRefresh) {
         <label class="form-label">USERNAME</label>
         <input class="input" id="uUsername" value="${esc(isEdit ? user.username || "" : "")}" />
       </div>
+
       <div class="form-group">
         <label class="form-label">FULL NAME</label>
         <input class="input" id="uFullName" value="${esc(isEdit ? user.fullName || "" : "")}" />
       </div>
+
       <div class="form-group">
         <label class="form-label">EMAIL</label>
         <input class="input" id="uEmail" value="${esc(isEdit ? user.email || "" : "")}" />
       </div>
+
       <div class="form-group">
         <label class="form-label">ROLE</label>
         <select class="input" id="uRole">
@@ -125,22 +180,26 @@ function openUserModal(user, onRefresh) {
           <option value="admin" ${isEdit && user.role === "admin" ? "selected" : ""}>admin</option>
         </select>
       </div>
+
       ${!isEdit ? `
         <div class="form-group">
           <label class="form-label">PASSWORD</label>
-          <input class="input" type="password" id="uPassword" />
+          <input class="input" type="password" id="uPassword" autocomplete="new-password" />
         </div>
+
         <div class="form-group">
           <label class="form-label">CONFIRM</label>
-          <input class="input" type="password" id="uConfirm" />
+          <input class="input" type="password" id="uConfirm" autocomplete="new-password" />
         </div>
       ` : ""}
+
       <div class="form-group">
         <label class="form-label" style="display:flex;align-items:center;gap:8px;">
           <input type="checkbox" id="uActive" ${!isEdit || user.isActive ? "checked" : ""} />
           <span>Active</span>
         </label>
       </div>
+
       <div class="error-box" id="uError"></div>
     </div>
   `);
@@ -152,11 +211,12 @@ function openUserModal(user, onRefresh) {
 
   ensureModalHost().appendChild(modal);
 
-  modal.querySelector("#uCancelBtn")?.addEventListener("click", () => closeModal(isEdit ? "editUserModal" : "addUserModal"));
+  modal.querySelector("#uCancelBtn")?.addEventListener("click", () => closeModal(modalId));
 
   modal.querySelector("#uSaveBtn")?.addEventListener("click", async () => {
     const errBox = modal.querySelector("#uError");
     errBox.textContent = "";
+    errBox.classList.remove("visible");
 
     const payload = {
       username: modal.querySelector("#uUsername").value.trim(),
@@ -173,6 +233,7 @@ function openUserModal(user, onRefresh) {
       const pwd = modal.querySelector("#uPassword").value;
       const cnf = modal.querySelector("#uConfirm").value;
       if (!pwd) return showErr(errBox, "Введите пароль");
+      if (pwd.length < 6) return showErr(errBox, "Пароль должен быть не менее 6 символов");
       if (pwd !== cnf) return showErr(errBox, "Пароли не совпадают");
       payload.password = pwd;
     }
@@ -180,21 +241,27 @@ function openUserModal(user, onRefresh) {
     try {
       if (isEdit) await updateUser(user.id, payload);
       else await createUser(payload);
+
       showToast(isEdit ? "Пользователь обновлён" : "Пользователь создан", "success");
-      closeModal(isEdit ? "editUserModal" : "addUserModal");
-      onRefresh?.();
+      closeModal(modalId);
+      await onRefresh?.();
     } catch (e) {
       showErr(errBox, e.message);
     }
   });
 
-  openModal(isEdit ? "editUserModal" : "addUserModal");
+  openModal(modalId);
 }
 
 function showErr(el, text) {
   el.textContent = text;
+  el.classList.add("visible");
 }
 
 function esc(v) {
-  return String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  return String(v ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }

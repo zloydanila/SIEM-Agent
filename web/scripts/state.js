@@ -2,7 +2,7 @@ export const state = {
   page: "dashboard",
   isAuthenticated: false,
   currentUser: null,
-  mustChangePassword: false,
+  mustChangePassword: localStorage.getItem("mustChangePassword") === "true",
   wsConnected: false,
   wsPort: 8080,
   wsClients: 0,
@@ -26,52 +26,82 @@ const listeners = new Set();
 
 export function subscribe(fn) {
   listeners.add(fn);
-  try { fn(state); } catch (e) { console.error(e); }
+  try {
+    fn(state);
+  } catch (e) {
+    console.error(e);
+  }
   return () => listeners.delete(fn);
 }
 
 export function notify() {
   listeners.forEach(fn => {
-    try { fn(state); } catch (e) { console.error(e); }
+    try {
+      fn(state);
+    } catch (e) {
+      console.error(e);
+    }
   });
+}
+
+function equal(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 export function setState(patch) {
   let changed = false;
+
   for (const [key, value] of Object.entries(patch)) {
-    if (JSON.stringify(state[key]) !== JSON.stringify(value)) {
+    if (!equal(state[key], value)) {
       state[key] = value;
       changed = true;
     }
   }
-  if (changed) {
-    state.lastUpdated = Date.now();
-    state.dataVersion++;
-    notify();
+
+  if (!changed) return;
+
+  if ("currentUser" in patch) {
+    const actualUser = patch.currentUser?.user || patch.currentUser || null;
+    state.currentUser = actualUser;
+    state.isAuthenticated = !!actualUser;
   }
+
+  if ("mustChangePassword" in patch) {
+    localStorage.setItem("mustChangePassword", String(!!patch.mustChangePassword));
+  }
+
+  state.lastUpdated = Date.now();
+  state.dataVersion++;
+  notify();
 }
 
 export function setDashboard(patch) {
   const next = { ...(state.dashboard || {}) };
   let changed = false;
+
   for (const [key, value] of Object.entries(patch)) {
-    if (JSON.stringify(next[key]) !== JSON.stringify(value)) {
+    if (!equal(next[key], value)) {
       next[key] = value;
       changed = true;
     }
   }
-  if (changed) {
-    state.dashboard = next;
-    state.lastUpdated = Date.now();
-    state.dataVersion++;
-    notify();
-  }
+
+  if (!changed) return;
+
+  state.dashboard = next;
+  state.lastUpdated = Date.now();
+  state.dataVersion++;
+  notify();
 }
 
 export function setUser(user) {
-  const actualUser = user?.user || user;
+  const actualUser = user?.user || user || null;
   state.currentUser = actualUser;
   state.isAuthenticated = !!actualUser;
+
+  if (actualUser) localStorage.setItem("user", JSON.stringify(actualUser));
+  else localStorage.removeItem("user");
+
   state.lastUpdated = Date.now();
   state.dataVersion++;
   notify();
@@ -79,12 +109,12 @@ export function setUser(user) {
 
 export function setAlertsFilter(filter) {
   const next = String(filter || "");
-  if (state.alertsFilter !== next) {
-    state.alertsFilter = next;
-    state.lastUpdated = Date.now();
-    state.dataVersion++;
-    notify();
-  }
+  if (state.alertsFilter === next) return;
+
+  state.alertsFilter = next;
+  state.lastUpdated = Date.now();
+  state.dataVersion++;
+  notify();
 }
 
 export function clearSession() {
@@ -109,5 +139,10 @@ export function clearSession() {
   state.alertsFilter = "";
   state.lastUpdated = Date.now();
   state.dataVersion++;
+
+  localStorage.removeItem("token");
+  localStorage.removeItem("mustChangePassword");
+  localStorage.removeItem("user");
+
   notify();
 }

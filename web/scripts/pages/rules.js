@@ -1,15 +1,50 @@
 import { rules as loadRules, createRule, updateRule, deleteRule, toggleRule } from "../api.js";
 import { showToast } from "../components/toast.js";
-import { createModal, openModal, closeModal, setModalBody, setModalFooter, ensureModalHost, openConfirmModal } from "../components/modal.js";
+import {
+  createModal,
+  openModal,
+  closeModal,
+  setModalBody,
+  setModalFooter,
+  ensureModalHost,
+  openConfirmModal
+} from "../components/modal.js";
 
-export async function renderRules({ rules: initialRules = [], currentUser = {}, canManage = false, onRefresh } = {}) {
+export async function renderRules({
+  rules: initialRules = [],
+  canAccessRules = false,
+  canManage = false,
+  onRefresh
+} = {}) {
   const root = document.createElement("div");
   root.className = "page-inner";
+
+  if (!canAccessRules) {
+    root.innerHTML = `
+      <section class="page-section">
+        <div class="page-hero">
+          <div>
+            <h2>Правила корреляции</h2>
+            <p>Раздел недоступен для вашей роли</p>
+          </div>
+        </div>
+        <div class="page-note" style="border-color:var(--warning);color:var(--warning);">
+          Просмотр и управление правилами корреляции доступны только администратору.
+        </div>
+      </section>
+    `;
+    return root;
+  }
+
   let data = Array.isArray(initialRules) ? initialRules : [];
   let error = null;
 
   if (!data.length) {
-    try { data = await loadRules(); } catch (e) { error = e.message; }
+    try {
+      data = await loadRules();
+    } catch (e) {
+      error = e.message;
+    }
   }
 
   root.innerHTML = `
@@ -17,7 +52,7 @@ export async function renderRules({ rules: initialRules = [], currentUser = {}, 
       <div class="page-hero">
         <div><h2>Правила корреляции</h2><p>${data.length} правил</p></div>
         <div class="page-actions">
-          <button class="btn ghost" id="rulesRefreshBtn">Refresh</button>
+          <button class="btn ghost" id="rulesRefreshBtn">Обновить</button>
           ${canManage ? `<button class="btn primary" id="addRuleBtn">+ Добавить правило</button>` : ""}
         </div>
       </div>
@@ -43,7 +78,16 @@ export async function renderRules({ rules: initialRules = [], currentUser = {}, 
             <tbody>
               ${data.length ? data.map(r => `
                 <tr>
-                  <td><div class="rule-toggle ${r.isEnabled ? "on" : ""}" data-toggle="${r.id}" title="${r.isEnabled ? "Включено" : "Отключено"}"><div class="rule-toggle-knob"></div></div></td>
+                  <td>
+                    <div
+                      class="rule-toggle ${r.isEnabled ? "on" : ""} ${!canManage ? "disabled" : ""}"
+                      ${canManage ? `data-toggle="${r.id}"` : ""}
+                      title="${r.isEnabled ? "Включено" : "Отключено"}"
+                      style="${!canManage ? "opacity:.6;pointer-events:none;" : ""}"
+                    >
+                      <div class="rule-toggle-knob"></div>
+                    </div>
+                  </td>
                   <td style="font-weight:600;color:${r.isEnabled ? "var(--text-primary)" : "var(--text-muted)"};">${esc(r.name || "")}</td>
                   <td><span class="badge ${r.ruleType === "threshold" ? "accent" : "warning"}">${esc(r.ruleType || "")}</span></td>
                   <td style="color:var(--text-muted);font-family:monospace;font-size:var(--font-xs);">${esc(r.matchEventType || "")}</td>
@@ -53,7 +97,7 @@ export async function renderRules({ rules: initialRules = [], currentUser = {}, 
                   <td style="color:var(--text-muted);">${esc(r.alertTitle || "")}</td>
                   ${canManage ? `<td><div style="display:flex;gap:6px;"><button class="btn mini ghost" data-edit="${r.id}">Edit</button><button class="btn mini danger" data-del="${r.id}" data-name="${esc(r.name || "")}">Del</button></div></td>` : ""}
                 </tr>
-              `).join("") : `<tr><td colspan="${canManage ? 9 : 8}" style="text-align:center;padding:20px;color:var(--text-muted);">Правил нет. Нажмите «+ Добавить правило»</td></tr>`}
+              `).join("") : `<tr><td colspan="${canManage ? 9 : 8}" style="text-align:center;padding:20px;color:var(--text-muted);">Правил нет</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -61,53 +105,72 @@ export async function renderRules({ rules: initialRules = [], currentUser = {}, 
     </section>
   `;
 
-  root.querySelectorAll("[data-toggle]").forEach(el => {
-    el.addEventListener("click", async () => {
-      const id = el.dataset.toggle;
-      const enabled = !el.classList.contains("on");
-      try {
-        await toggleRule(id, enabled);
-        showToast(enabled ? "Правило включено" : "Правило отключено", "success");
-        onRefresh?.();
-      } catch (e) {
-        showToast(e.message, "danger");
-      }
-    });
-  });
-
-  root.querySelectorAll("[data-edit]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const rule = data.find(r => String(r.id) === btn.dataset.edit);
-      if (rule) openRuleModal(rule, onRefresh);
-    });
-  });
-
-  root.querySelectorAll("[data-del]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const id = btn.dataset.del;
-      const name = btn.dataset.name;
-      openConfirmModal("Удалить правило?", `Удалить правило «${name}»? Это действие необратимо.`, async () => {
+  if (canManage) {
+    root.querySelectorAll("[data-toggle]").forEach(el => {
+      el.addEventListener("click", async () => {
+        const id = el.dataset.toggle;
+        const enabled = !el.classList.contains("on");
         try {
-          await deleteRule(id);
-          showToast("Правило удалено", "success");
-          onRefresh?.();
+          await toggleRule(id, enabled);
+          showToast(enabled ? "Правило включено" : "Правило отключено", "success");
+          await onRefresh?.();
         } catch (e) {
           showToast(e.message, "danger");
         }
       });
     });
+
+    root.querySelectorAll("[data-edit]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const rule = data.find(r => String(r.id) === btn.dataset.edit);
+        if (rule) openRuleModal(rule, onRefresh);
+      });
+    });
+
+    root.querySelectorAll("[data-del]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const id = btn.dataset.del;
+        const name = btn.dataset.name;
+
+        openConfirmModal(
+          "Удалить правило?",
+          `Удалить правило «${name}»? Это действие необратимо.`,
+          async () => {
+            try {
+              await deleteRule(id);
+              showToast("Правило удалено", "success");
+              await onRefresh?.();
+            } catch (e) {
+              showToast(e.message, "danger");
+            }
+          }
+        );
+      });
+    });
+
+    root.querySelector("#addRuleBtn")?.addEventListener("click", () => openRuleModal(null, onRefresh));
+  }
+
+  root.querySelector("#rulesRefreshBtn")?.addEventListener("click", async () => {
+    await onRefresh?.();
   });
 
-  root.querySelector("#rulesRefreshBtn")?.addEventListener("click", () => onRefresh?.());
-  root.querySelector("#addRuleBtn")?.addEventListener("click", () => openRuleModal(null, onRefresh));
   return root;
 }
 
 function openRuleModal(rule, onRefresh) {
   ensureModalHost();
+
   const isEdit = !!rule;
   const modalId = isEdit ? "editRuleModal" : "addRuleModal";
-  const modal = createModal({ id: modalId, title: isEdit ? "Редактировать правило" : "Новое правило корреляции", width: "560px" });
+  const existing = document.getElementById(modalId);
+  if (existing) existing.remove();
+
+  const modal = createModal({
+    id: modalId,
+    title: isEdit ? "Редактировать правило" : "Новое правило корреляции",
+    width: "560px"
+  });
 
   setModalBody(modal, `
     <div class="form-grid">
@@ -176,6 +239,7 @@ function openRuleModal(rule, onRefresh) {
 
   const typeSelect = modal.querySelector("#rType");
   const secondaryGroup = modal.querySelector("#rSecondaryGroup");
+
   typeSelect?.addEventListener("change", () => {
     secondaryGroup.style.display = typeSelect.value === "correlation" ? "" : "none";
   });
@@ -214,8 +278,9 @@ function openRuleModal(rule, onRefresh) {
         await createRule(payload);
         showToast("Правило создано", "success");
       }
+
       closeModal(modalId);
-      onRefresh?.();
+      await onRefresh?.();
     } catch (e) {
       showErr(errBox, e.message);
     }
@@ -238,5 +303,9 @@ function sevBadgeClass(s) {
 }
 
 function esc(v) {
-  return String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  return String(v ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }

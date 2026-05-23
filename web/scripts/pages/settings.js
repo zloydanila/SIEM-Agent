@@ -13,12 +13,23 @@ import {
   deleteRule,
   toggleRule
 } from "../api.js";
-import { createModal, openModal, closeModal, setModalBody, setModalFooter, ensureModalHost, openConfirmModal } from "../components/modal.js";
+import {
+  createModal,
+  openModal,
+  closeModal,
+  setModalBody,
+  setModalFooter,
+  ensureModalHost,
+  openConfirmModal
+} from "../components/modal.js";
+import { setState } from "../state.js";
 
 export async function renderSettings({
   mustChangePassword = false,
   currentUser = {},
   canManage = false,
+  canAccessRules = false,
+  canClearData = false,
   rules: initialRules = [],
   onRefresh
 } = {}) {
@@ -29,17 +40,32 @@ export async function renderSettings({
   let data = { totalEvents: 0, totalAlerts: 0 };
   let wsStatus = { wsRunning: false, wsPort: 8080, wsClients: 0 };
 
-  try { wsStatus = await loadStatus(); } catch (_) {}
   try {
-    const [ev, al] = await Promise.all([fetchCount("/api/events"), fetchCount("/api/alerts")]);
+    wsStatus = await loadStatus();
+  } catch (_) {}
+
+  try {
+    const [ev, al] = await Promise.all([
+      fetchCount("/api/events"),
+      fetchCount("/api/alerts")
+    ]);
     data.totalEvents = ev;
     data.totalAlerts = al;
   } catch (_) {}
-  if (!rulesData.length) {
-    try { rulesData = await loadRules(); } catch (_) {}
+
+  if (canAccessRules && !rulesData.length) {
+    try {
+      rulesData = await loadRules();
+    } catch (_) {
+      rulesData = [];
+    }
   }
 
-  const forcedPasswordNotice = mustChangePassword ? `<div class="page-note" style="border-color:var(--warning);color:var(--warning);margin-top:16px;">Требуется смена пароля. Сначала обновите пароль, чтобы продолжить работу.</div>` : "";
+  const forcedPasswordNotice = mustChangePassword
+    ? `<div class="page-note" style="border-color:var(--warning);color:var(--warning);margin-top:16px;">
+         Требуется обязательная смена пароля. Пока пароль не будет изменён, работа с системой заблокирована.
+       </div>`
+    : "";
 
   root.innerHTML = `
     <section class="page-section">
@@ -48,8 +74,9 @@ export async function renderSettings({
           <h2>Настройки</h2>
           <p>System information and data management</p>
         </div>
-        ${!canManage ? `<div class="role-badge">Только просмотр</div>` : ""}
+        ${!canManage ? `<div class="role-badge">Ограниченный доступ</div>` : ""}
       </div>
+
       ${forcedPasswordNotice}
 
       <div class="two-col">
@@ -72,7 +99,9 @@ export async function renderSettings({
                 <div class="settings-row"><span>Хеширование</span><span class="badge success">PBKDF2 · 100K</span></div>
                 <div class="settings-row"><span>Соль</span><span class="badge success">256-bit CSPRNG</span></div>
               </div>
-              <div style="margin-top:12px;"><button class="btn primary" id="changePwBtn" style="width:100%;">Сменить пароль</button></div>
+              <div style="margin-top:12px;">
+                <button class="btn primary" id="changePwBtn" style="width:100%;">Сменить пароль</button>
+              </div>
             </div>
           </div>
 
@@ -85,7 +114,12 @@ export async function renderSettings({
                 <div class="settings-row"><span>Событий</span><span id="dbEvents">${data.totalEvents}</span></div>
                 <div class="settings-row"><span>Алертов</span><span id="dbAlerts">${data.totalAlerts}</span></div>
               </div>
-              ${canManage ? `<div style="display:flex;gap:8px;margin-top:12px;"><button class="btn danger" style="flex:1;" id="clearEventsBtn">Очистить события</button><button class="btn danger" style="flex:1;" id="clearAlertsBtn">Очистить алерты</button></div>` : ""}
+              ${canClearData ? `
+                <div style="display:flex;gap:8px;margin-top:12px;">
+                  <button class="btn danger" style="flex:1;" id="clearEventsBtn">Очистить события</button>
+                  <button class="btn danger" style="flex:1;" id="clearAlertsBtn">Очистить алерты</button>
+                </div>
+              ` : ""}
             </div>
           </div>
         </div>
@@ -113,10 +147,15 @@ export async function renderSettings({
           </div>
 
           <div class="card slide-up">
-            <div class="card-header"><h3>Правила корреляции</h3><span class="badge muted" id="rulesCount">${rulesData.length} правил</span></div>
+            <div class="card-header">
+              <h3>Правила корреляции</h3>
+              <span class="badge muted" id="rulesCount">${canAccessRules ? `${rulesData.length} правил` : "Недоступно"}</span>
+            </div>
             <div class="card-body">
-              <div id="rulesList" class="content-gap" style="max-height:300px;overflow-y:auto;">${renderRulesList(rulesData, canManage, currentUser)}</div>
-              ${canManage ? `<button class="btn primary" style="width:100%;margin-top:12px;" id="addRuleBtn">+ Добавить правило</button>` : ""}
+              <div id="rulesList" class="content-gap" style="max-height:300px;overflow-y:auto;">
+                ${canAccessRules ? renderRulesList(rulesData, canManage) : '<div style="text-align:center;padding:20px;color:var(--text-muted);">Раздел доступен только администратору</div>'}
+              </div>
+              ${canAccessRules && canManage ? `<button class="btn primary" style="width:100%;margin-top:12px;" id="addRuleBtn">+ Добавить правило</button>` : ""}
             </div>
           </div>
         </div>
@@ -124,194 +163,292 @@ export async function renderSettings({
     </section>
   `;
 
-  root.querySelector("#changePwBtn")?.addEventListener("click", () => openChangePasswordModal(mustChangePassword, onRefresh));
+  root.querySelector("#changePwBtn")?.addEventListener("click", () => {
+    openChangePasswordModal({
+      mustChangePasswordNow: mustChangePassword,
+      onSuccess: async () => {
+        setState({ mustChangePassword: false });
+        await onRefresh?.();
+      }
+    });
+  });
 
-  if (mustChangePassword && !document.getElementById("changePwModal")) {
-    requestAnimationFrame(() => openChangePasswordModal(true, onRefresh));
+  if (mustChangePassword) {
+    requestAnimationFrame(() => {
+      openChangePasswordModal({
+        mustChangePasswordNow: true,
+        onSuccess: async () => {
+          setState({ mustChangePassword: false });
+          await onRefresh?.();
+        }
+      });
+    });
   }
 
   root.querySelector("#clearEventsBtn")?.addEventListener("click", () => {
-    openConfirmModal("Очистить события?", "Это действие необратимо - все события будут удалены из базы данных.", async () => {
-      try {
-        await clearEvents();
-        showToast("События очищены", "success");
-        root.querySelector("#dbEvents").textContent = "0";
-      } catch (e) { showToast(e.message, "danger"); }
-    });
+    openConfirmModal(
+      "Очистить события?",
+      "Это действие необратимо — все события будут удалены из базы данных.",
+      async () => {
+        try {
+          await clearEvents();
+          showToast("События очищены", "success");
+          root.querySelector("#dbEvents").textContent = "0";
+          await onRefresh?.();
+        } catch (e) {
+          showToast(e.message, "danger");
+        }
+      }
+    );
   });
 
   root.querySelector("#clearAlertsBtn")?.addEventListener("click", () => {
-    openConfirmModal("Очистить алерты?", "Это действие необратимо - все алерты будут удалены из базы данных.", async () => {
-      try {
-        await clearAlerts();
-        showToast("Алерты очищены", "success");
-        root.querySelector("#dbAlerts").textContent = "0";
-      } catch (e) { showToast(e.message, "danger"); }
-    });
+    openConfirmModal(
+      "Очистить алерты?",
+      "Это действие необратимо — все алерты будут удалены из базы данных.",
+      async () => {
+        try {
+          await clearAlerts();
+          showToast("Алерты очищены", "success");
+          root.querySelector("#dbAlerts").textContent = "0";
+          await onRefresh?.();
+        } catch (e) {
+          showToast(e.message, "danger");
+        }
+      }
+    );
   });
 
   root.querySelector("#expEventsBtn")?.addEventListener("click", async () => {
-    try { downloadBlob(await exportEventsCsv(), "events.csv"); showToast("События экспортированы", "success"); }
-    catch (e) { showToast(e.message, "danger"); }
+    try {
+      await exportEventsCsv();
+      showToast("События экспортированы", "success");
+    } catch (e) {
+      showToast(e.message, "danger");
+    }
   });
 
   root.querySelector("#expAlertsBtn")?.addEventListener("click", async () => {
-    try { downloadBlob(await exportAlertsCsv(), "alerts.csv"); showToast("Алерты экспортированы", "success"); }
-    catch (e) { showToast(e.message, "danger"); }
+    try {
+      await exportAlertsCsv();
+      showToast("Алерты экспортированы", "success");
+    } catch (e) {
+      showToast(e.message, "danger");
+    }
   });
 
   root.querySelector("#expReportBtn")?.addEventListener("click", async () => {
-    try { downloadBlob(await exportReportJson(), "report.json"); showToast("Отчет экспортирован", "success"); }
-    catch (e) { showToast(e.message, "danger"); }
+    try {
+      await exportReportJson();
+      showToast("Отчет экспортирован", "success");
+    } catch (e) {
+      showToast(e.message, "danger");
+    }
   });
 
-  root.querySelectorAll("[data-toggle-rule]").forEach(el => {
-    el.addEventListener("click", async () => {
-      const id = el.dataset.toggleRule;
-      const enabled = el.dataset.enabled === "true";
-      try {
-        await toggleRule(id, !enabled);
-        showToast(!enabled ? "Правило включено" : "Правило отключено", "success");
-        onRefresh?.();
-      } catch (e) { showToast(e.message, "danger"); }
+  if (canAccessRules) {
+    root.querySelectorAll("[data-toggle-rule]").forEach(el => {
+      el.addEventListener("click", async () => {
+        if (!canManage) return;
+        const id = el.dataset.toggleRule;
+        const enabled = el.dataset.enabled === "true";
+        try {
+          await toggleRule(id, !enabled);
+          showToast(!enabled ? "Правило включено" : "Правило отключено", "success");
+          await onRefresh?.();
+        } catch (e) {
+          showToast(e.message, "danger");
+        }
+      });
     });
-  });
 
-  root.querySelectorAll("[data-edit-rule]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const rule = rulesData.find(r => String(r.id) === btn.dataset.editRule);
-      if (rule) openRuleModal(rule, onRefresh);
+    root.querySelectorAll("[data-edit-rule]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        if (!canManage) return;
+        const rule = rulesData.find(r => String(r.id) === btn.dataset.editRule);
+        if (rule) openRuleModal(rule, onRefresh);
+      });
     });
-  });
 
-  root.querySelectorAll("[data-del-rule]").forEach(btn => {
-    btn.addEventListener("click", async () => {
-      const id = btn.dataset.delRule;
-      const name = btn.dataset.name;
-      if (!confirm(`Удалить правило «${name}»? Это действие необратимо.`)) return;
-      try {
-        await deleteRule(id);
-        showToast("Правило удалено", "success");
-        onRefresh?.();
-      } catch (e) { showToast(e.message, "danger"); }
+    root.querySelectorAll("[data-del-rule]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        if (!canManage) return;
+        const id = btn.dataset.delRule;
+        const name = btn.dataset.name || "";
+        openConfirmModal(
+          "Удалить правило?",
+          `Правило «${esc(name)}» будет удалено без возможности восстановления.`,
+          async () => {
+            try {
+              await deleteRule(id);
+              showToast("Правило удалено", "success");
+              await onRefresh?.();
+            } catch (e) {
+              showToast(e.message, "danger");
+            }
+          }
+        );
+      });
     });
-  });
 
-  root.querySelector("#addRuleBtn")?.addEventListener("click", () => openRuleModal(null, onRefresh));
+    root.querySelector("#addRuleBtn")?.addEventListener("click", () => {
+      if (!canManage) return;
+      openRuleModal(null, onRefresh);
+    });
+  }
+
   return root;
 }
 
 function fetchCount(path) {
   return fetch(path, {
     headers: {
-      Authorization: localStorage.getItem("token") ? `Bearer ${localStorage.getItem("token")}` : ""
+      Authorization: localStorage.getItem("token")
+        ? `Bearer ${localStorage.getItem("token")}`
+        : ""
     },
     credentials: "include"
   })
     .then(r => r.json())
-    .then(d => Array.isArray(d) ? d.length : 0)
+    .then(d => (Array.isArray(d) ? d.length : 0))
     .catch(() => 0);
 }
 
-function downloadBlob(blob, filename) {
-  if (!(blob instanceof Blob)) throw new Error("Invalid data for download");
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  requestAnimationFrame(() => {
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  });
-}
-
-function openChangePasswordModal(mustChangePasswordNow = false, onSuccess) {
+function openChangePasswordModal({ mustChangePasswordNow = false, onSuccess } = {}) {
   ensureModalHost();
+
   const modalId = "changePwModal";
-  const modal = createModal({ 
-    id: modalId, 
-    title: "Смена пароля", 
-    width: "440px",
-    isBlocking: mustChangePasswordNow 
+  const existing = document.getElementById(modalId);
+  if (existing) existing.remove();
+
+  const modal = createModal({
+    id: modalId,
+    title: "Смена пароля",
+    width: "460px",
+    isBlocking: mustChangePasswordNow
   });
 
   setModalBody(modal, `
     <div class="form-grid">
+      ${mustChangePasswordNow ? `
+        <div class="page-note" style="margin:0 0 12px 0;border-color:var(--warning);color:var(--warning);">
+          Вы обязаны сменить пароль перед продолжением работы.
+        </div>
+      ` : ""}
+
       <div class="form-group">
-        <label class="form-label">${mustChangePasswordNow ? 'ВХОД ЗАБЛОКИРОВАН' : 'ТЕКУЩИЙ ПАРОЛЬ'}</label>
-        ${mustChangePasswordNow ? '<div style="padding:12px;background:var(--bg-secondary);border-radius:var(--radius-small);color:var(--text-secondary);font-size:var(--font-sm);margin-bottom:12px;">Вы должны сменить пароль перед использованием системы. Это требуемая операция.</div>' : '<input class="input" type="password" id="pwCurrent" />'}
+        <label class="form-label">ТЕКУЩИЙ ПАРОЛЬ</label>
+        <input class="input" type="password" id="pwCurrent" autocomplete="current-password" />
       </div>
+
       <div class="form-group">
         <label class="form-label">НОВЫЙ ПАРОЛЬ</label>
-        <input class="input" type="password" id="pwNew" />
+        <input class="input" type="password" id="pwNew" autocomplete="new-password" />
       </div>
+
       <div class="form-group">
         <label class="form-label">ПОДТВЕРЖДЕНИЕ</label>
-        <input class="input" type="password" id="pwConfirm" />
+        <input class="input" type="password" id="pwConfirm" autocomplete="new-password" />
       </div>
+
       <div class="error-box" id="pwError"></div>
     </div>
   `);
 
-  setModalFooter(modal, `
-    ${!mustChangePasswordNow ? '<button class="btn ghost" id="pwCancelBtn">Отмена</button>' : ''}
-    <button class="btn primary" id="pwSaveBtn" style="${mustChangePasswordNow ? 'width:100%;' : ''}">Сменить пароль</button>
-  `);
+  setModalFooter(
+    modal,
+    `
+      ${!mustChangePasswordNow ? '<button class="btn ghost" id="pwCancelBtn">Отмена</button>' : ""}
+      <button class="btn primary" id="pwSaveBtn" style="${mustChangePasswordNow ? "width:100%;" : ""}">Сменить пароль</button>
+    `
+  );
 
   ensureModalHost().appendChild(modal);
 
+  const errBox = modal.querySelector("#pwError");
+  const currentInput = modal.querySelector("#pwCurrent");
+  const newInput = modal.querySelector("#pwNew");
+  const confirmInput = modal.querySelector("#pwConfirm");
   const saveBtn = modal.querySelector("#pwSaveBtn");
   const cancelBtn = modal.querySelector("#pwCancelBtn");
-  if (!saveBtn) return;
 
-  if (cancelBtn) {
+  if (!mustChangePasswordNow && cancelBtn) {
     cancelBtn.addEventListener("click", () => closeModal(modalId));
   }
 
-  saveBtn.addEventListener("click", async () => {
-    const currentPassword = mustChangePasswordNow ? "" : (modal.querySelector("#pwCurrent").value.trim());
-    const newPassword = modal.querySelector("#pwNew").value.trim();
-    const confirmPassword = modal.querySelector("#pwConfirm").value.trim();
-    const errBox = modal.querySelector("#pwError");
+  if (mustChangePasswordNow) {
+    modal.querySelectorAll("[data-modal-close], .modal-close, .modal-backdrop").forEach(el => {
+      el.remove();
+    });
 
+    const stopEscape = e => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+
+    document.addEventListener("keydown", stopEscape, true);
+
+    const observer = new MutationObserver(() => {
+      if (!document.getElementById(modalId)) {
+        document.addEventListener("keydown", stopEscape, true);
+        requestAnimationFrame(() => openModal(modalId));
+      }
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    modal.__cleanupBlocking = () => {
+      document.removeEventListener("keydown", stopEscape, true);
+      observer.disconnect();
+    };
+  }
+
+  saveBtn?.addEventListener("click", async () => {
     errBox.classList.remove("visible");
     errBox.textContent = "";
 
-    if (!mustChangePasswordNow && !currentPassword) return setPwErr(errBox, "Введите текущий пароль");
+    const currentPassword = currentInput?.value?.trim() || "";
+    const newPassword = newInput?.value?.trim() || "";
+    const confirmPassword = confirmInput?.value?.trim() || "";
+
+    if (!currentPassword) return setPwErr(errBox, "Введите текущий пароль");
     if (newPassword.length < 6) return setPwErr(errBox, "Новый пароль должен быть не менее 6 символов");
     if (newPassword !== confirmPassword) return setPwErr(errBox, "Пароли должны совпадать");
+    if (currentPassword === newPassword) return setPwErr(errBox, "Новый пароль должен отличаться от текущего");
+
+    saveBtn.disabled = true;
 
     try {
       await changePassword(currentPassword, newPassword);
       showToast("Пароль изменён", "success");
-      if (mustChangePasswordNow) localStorage.removeItem("mustChangePassword");
+      if (typeof modal.__cleanupBlocking === "function") modal.__cleanupBlocking();
       closeModal(modalId);
-      onSuccess?.();
+      await onSuccess?.();
     } catch (e) {
-      setPwErr(errBox, e.message);
+      setPwErr(errBox, e.message || "Не удалось сменить пароль");
+    } finally {
+      saveBtn.disabled = false;
     }
   });
 
   openModal(modalId);
-
-  // Блокировка Escape при обязательной смене
-  if (mustChangePasswordNow) {
-    const handleEscape = (e) => {
-      if (e.key === "Escape") e.preventDefault();
-    };
-    document.addEventListener("keydown", handleEscape);
-    const cleanup = () => document.removeEventListener("keydown", handleEscape);
-    modal.addEventListener("remove", cleanup);
-  }
 }
 
 function openRuleModal(rule, onRefresh) {
   ensureModalHost();
+
   const isEdit = !!rule;
   const modalId = isEdit ? "editRuleModal" : "addRuleModal";
-  const modal = createModal({ id: modalId, title: isEdit ? "Редактировать правило" : "Новое правило корреляции", width: "560px" });
+  const existing = document.getElementById(modalId);
+  if (existing) existing.remove();
+
+  const modal = createModal({
+    id: modalId,
+    title: isEdit ? "Редактировать правило" : "Новое правило корреляции",
+    width: "560px"
+  });
 
   setModalBody(modal, `
     <div class="form-grid">
@@ -319,6 +456,7 @@ function openRuleModal(rule, onRefresh) {
         <label class="form-label">НАЗВАНИЕ ПРАВИЛА</label>
         <input class="input" id="rName" value="${esc(isEdit ? rule.name || "" : "")}" />
       </div>
+
       <div class="form-group">
         <label class="form-label">ТИП ПРАВИЛА</label>
         <select class="input" id="rType">
@@ -326,14 +464,17 @@ function openRuleModal(rule, onRefresh) {
           <option value="correlation" ${isEdit && rule.ruleType === "correlation" ? "selected" : ""}>Корреляция (correlation)</option>
         </select>
       </div>
+
       <div class="form-group">
         <label class="form-label">ТИП СОБЫТИЯ</label>
         <input class="input" id="rMatchEvent" value="${esc(isEdit ? rule.matchEventType || "" : "")}" />
       </div>
+
       <div class="form-group" id="rSecondaryGroup" style="${isEdit && rule.ruleType === "correlation" ? "" : "display:none;"}">
         <label class="form-label">ВТОРИЧНОЕ СОБЫТИЕ</label>
         <input class="input" id="rSecondaryEvent" value="${esc(isEdit ? rule.secondaryEventType || "" : "")}" />
       </div>
+
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">ПОРОГ</label>
@@ -348,6 +489,7 @@ function openRuleModal(rule, onRefresh) {
           <input class="input" type="number" id="rCooldown" value="${isEdit ? (rule.cooldownSeconds || 60) : 60}" min="1" />
         </div>
       </div>
+
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">УРОВЕНЬ УГРОЗЫ</label>
@@ -358,15 +500,18 @@ function openRuleModal(rule, onRefresh) {
             <option value="critical" ${isEdit && rule.alertSeverity === "critical" ? "selected" : ""}>critical</option>
           </select>
         </div>
+
         <div class="form-group" style="grid-column:span 2;">
           <label class="form-label">ЗАГОЛОВОК АЛЕРТА</label>
           <input class="input" id="rTitle" value="${esc(isEdit ? rule.alertTitle || "" : "")}" />
         </div>
       </div>
+
       <div class="form-group">
         <label class="form-label">ОПИСАНИЕ АЛЕРТА</label>
         <input class="input" id="rDesc" value="${esc(isEdit ? rule.alertDescription || "" : "")}" />
       </div>
+
       <div class="error-box" id="rError"></div>
     </div>
   `);
@@ -380,6 +525,7 @@ function openRuleModal(rule, onRefresh) {
 
   const typeSelect = modal.querySelector("#rType");
   const secondaryGroup = modal.querySelector("#rSecondaryGroup");
+
   typeSelect?.addEventListener("change", () => {
     secondaryGroup.style.display = typeSelect.value === "correlation" ? "" : "none";
   });
@@ -391,7 +537,10 @@ function openRuleModal(rule, onRefresh) {
       name: modal.querySelector("#rName").value.trim(),
       ruleType: typeSelect.value,
       matchEventType: modal.querySelector("#rMatchEvent").value.trim(),
-      secondaryEventType: typeSelect.value === "correlation" ? modal.querySelector("#rSecondaryEvent").value.trim() : "",
+      secondaryEventType:
+        typeSelect.value === "correlation"
+          ? modal.querySelector("#rSecondaryEvent").value.trim()
+          : "",
       threshold: parseInt(modal.querySelector("#rThreshold").value, 10) || 1,
       windowSeconds: parseInt(modal.querySelector("#rWindow").value, 10) || 60,
       cooldownSeconds: parseInt(modal.querySelector("#rCooldown").value, 10) || 60,
@@ -419,7 +568,7 @@ function openRuleModal(rule, onRefresh) {
         showToast("Правило создано", "success");
       }
       closeModal(modalId);
-      onRefresh?.();
+      await onRefresh?.();
     } catch (e) {
       showErr(errBox, e.message);
     }
@@ -428,55 +577,36 @@ function openRuleModal(rule, onRefresh) {
   openModal(modalId);
 }
 
-function renderRulesList(rules, canManage, currentUser) {
-  if (!rules.length) return '<div style="text-align:center;padding:20px;color:var(--text-muted);">Правил нет. Нажмите «+ Добавить правило»</div>';
+function renderRulesList(rules, canManage) {
+  if (!rules.length) {
+    return '<div style="text-align:center;padding:20px;color:var(--text-muted);">Правил нет</div>';
+  }
+
   return rules.map(r => `
     <div style="display:flex;align-items:center;gap:8px;padding:8px;border-radius:var(--radius-small);border:1px solid ${r.isEnabled ? "var(--border)" : "transparent"};">
-      <div class="rule-toggle ${r.isEnabled ? "on" : ""}" data-toggle-rule="${r.id}" data-enabled="${r.isEnabled}" style="flex-shrink:0;">
+      <div class="rule-toggle ${r.isEnabled ? "on" : ""}" ${canManage ? `data-toggle-rule="${r.id}" data-enabled="${r.isEnabled}"` : ""} style="flex-shrink:0;${!canManage ? "opacity:.6;pointer-events:none;" : ""}">
         <div class="rule-toggle-knob"></div>
       </div>
+
       <div style="flex:1;min-width:0;">
-        <div style="font-weight:600;font-size:var(--font-sm);color:${r.isEnabled ? "var(--text-primary)" : "var(--text-muted)"};">${esc(r.name || "")}</div>
+        <div style="font-weight:600;font-size:var(--font-sm);color:${r.isEnabled ? "var(--text-primary)" : "var(--text-muted)"};">
+          ${esc(r.name || "")}
+        </div>
         <div style="font-size:var(--font-xs);color:var(--text-muted);">
           <span class="badge ${r.ruleType === "threshold" ? "accent" : "warning"}" style="height:18px;padding:0 6px;font-size:10px;">${esc(r.ruleType || "")}</span>
           <span style="font-family:monospace;">${esc(r.matchEventType || "")}</span>
           <span class="badge ${sevBadgeClass(r.alertSeverity)}" style="height:18px;padding:0 6px;font-size:10px;">${esc(r.alertSeverity || "")}</span>
         </div>
       </div>
+
       ${canManage ? `
         <div style="display:flex;gap:4px;flex-shrink:0;">
           <button class="btn mini ghost" data-edit-rule="${r.id}">Edit</button>
-          ${r.id === currentUser?.id ? '<span class="badge muted">Self</span>' : `<button class="btn mini danger" data-del-rule="${r.id}" data-name="${esc(r.name || "")}">Del</button>`}
-        </div>` : ""}
+          <button class="btn mini danger" data-del-rule="${r.id}" data-name="${esc(r.name || "")}">Del</button>
+        </div>
+      ` : ""}
     </div>
   `).join("");
-}
-
-function openConfirmModal(title, message, onConfirm) {
-  ensureModalHost();
-  const modalId = "confirmModal_" + Date.now();
-  const modal = createModal({ id: modalId, title: title, width: "420px" });
-
-  setModalBody(modal, `
-    <div style="padding:12px 0;">
-      <p style="color:var(--text-secondary);margin:0;line-height:1.5;">${message}</p>
-    </div>
-  `);
-
-  setModalFooter(modal, `
-    <button class="btn ghost" id="confirmCancel">Отмена</button>
-    <button class="btn danger" id="confirmOk">Подтвердить</button>
-  `);
-
-  ensureModalHost().appendChild(modal);
-
-  modal.querySelector("#confirmCancel")?.addEventListener("click", () => closeModal(modalId));
-  modal.querySelector("#confirmOk")?.addEventListener("click", async () => {
-    closeModal(modalId);
-    await onConfirm?.();
-  });
-
-  openModal(modalId);
 }
 
 function showErr(el, text) {
@@ -498,5 +628,9 @@ function sevBadgeClass(s) {
 }
 
 function esc(v) {
-  return String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  return String(v ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }

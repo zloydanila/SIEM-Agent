@@ -1,11 +1,10 @@
 import { events as loadEvents } from "../api.js";
-import { showToast } from "../components/toast.js";
 
 export async function renderEvents({ events: initialEvents = [], onRefresh } = {}) {
   const root = document.createElement("div");
   root.className = "page-inner";
 
-  let data = initialEvents;
+  let data = Array.isArray(initialEvents) ? initialEvents : [];
   let error = null;
 
   if (!data.length) {
@@ -60,7 +59,10 @@ export async function renderEvents({ events: initialEvents = [], onRefresh } = {
     </section>
   `;
 
-  root.querySelector("#eventsRefreshBtn")?.addEventListener("click", () => onRefresh?.());
+  root.querySelector("#eventsRefreshBtn")?.addEventListener("click", async () => {
+    await onRefresh?.();
+  });
+
   return root;
 }
 
@@ -94,5 +96,9 @@ function formatTime(ts) {
 }
 
 function esc(v) {
-  return String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  return String(v ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }
