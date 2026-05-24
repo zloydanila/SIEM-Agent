@@ -14,6 +14,26 @@ void DashboardStatsModel::refresh() {
     emit statsChanged();
 }
 
+void DashboardStatsModel::refreshCharts() {
+    if (!m_db) return;
+    updateTopDevices();
+    updateActivity();
+    emit statsChanged();
+}
+
+void DashboardStatsModel::onEventReceived() {
+    if (!m_db) return;
+    updateCounts();
+    emit statsChanged();
+}
+
+void DashboardStatsModel::onAlertReceived() {
+    if (!m_db) return;
+    m_totalAlerts = m_db->getAlertCount();
+    m_openAlerts = m_db->getAlertCountByStatus("open");
+    emit statsChanged();
+}
+
 void DashboardStatsModel::updateCounts() {
     m_criticalCount = m_db->getEventCountBySeverity("critical");
     m_highCount = m_db->getEventCountBySeverity("high");

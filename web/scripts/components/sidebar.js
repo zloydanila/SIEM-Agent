@@ -1,12 +1,11 @@
 import { logout } from "../api.js";
 
 const MENU_ITEMS = [
-  { id: "dashboard", icon: "D", label: "Дашборд" },
-  { id: "events", icon: "E", label: "События" },
-  { id: "alerts", icon: "A", label: "Алерты" },
-  { id: "rules", icon: "R", label: "Правила" },
-  { id: "users", icon: "U", label: "Пользователи" },
-  { id: "settings", icon: "S", label: "Настройки" }
+  { id: "dashboard", label: "Дашборд" },
+  { id: "events", label: "События" },
+  { id: "alerts", label: "Алерты" },
+  { id: "rules", label: "Правила" },
+  { id: "settings", label: "Настройки" }
 ];
 
 function getUserRole(user) {
@@ -50,8 +49,7 @@ export function createSidebar({ active = "dashboard", currentUser = null, onNavi
     <nav class="sidebar-nav">
       ${allowedItems.map(item => `
         <button class="sidebar-item ${active === item.id ? "active" : ""}" data-nav="${item.id}">
-          <span class="sidebar-item-icon">${item.icon}</span>
-          <span>${item.label}</span>
+          <span class="sidebar-item-label">${item.label}</span>
         </button>
       `).join("")}
     </nav>

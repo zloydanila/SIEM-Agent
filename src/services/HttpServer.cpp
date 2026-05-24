@@ -1,4 +1,5 @@
 #include "HttpServer.h"
+#include "WebSocketWorker.h"
 
 #include "../services/DatabaseService.h"
 #include "../managers/AuthManager.h"
@@ -38,12 +39,31 @@ HttpServer::HttpServer(QObject *parent) : QObject(parent) {
 }
 
 bool HttpServer::start(quint16 port) {
-    if (!m_server.listen(QHostAddress::Any, port)) {
-        emit serverError(m_server.errorString());
-        return false;
+  return startWithFallback(port, nullptr);
+}
+
+bool HttpServer::startWithFallback(quint16 preferredPort, quint16 *boundPort) {
+    const QList<quint16> ports = { preferredPort, quint16(8444), quint16(8445), quint16(9080) };
+
+    for (quint16 port : ports) {
+        if (m_server.isListening()) m_server.close();
+
+        if (m_server.listen(QHostAddress::Any, port)) {
+            if (boundPort) *boundPort = port;
+            qInfo() << "[HTTP] Сервер слушает порт" << port;
+            emit serverStarted(port);
+            return true;
+        }
+        qWarning() << "[HTTP] Порт" << port << "занят:" << m_server.errorString();
     }
-    emit serverStarted(port);
-    return true;
+
+    const QString err = QString(
+        "Не удалось занять порты %1/%2/%3/%4. "
+        "Остановите другой siem-server: pkill -f siem-server")
+                            .arg(ports[0]).arg(ports[1]).arg(ports[2]).arg(ports[3]);
+    emit serverError(err);
+    qCritical() << "[HTTP]" << err;
+    return false;
 }
 
 void HttpServer::stop() {
@@ -69,6 +89,7 @@ void HttpServer::setUserListModel(UserListModel *users) { m_users = users; }
 void HttpServer::setRuleListModel(RuleListModel *rules) { m_rules = rules; }
 void HttpServer::setWebRoot(const QString &root) { m_webRoot = root; }
 void HttpServer::setAllowedOrigin(const QString &origin) { m_allowedOrigin = origin; }
+void HttpServer::setWebSocketWorker(WebSocketWorker *worker) { m_wsWorker = worker; }
 
 void HttpServer::onNewConnection() {
     while (m_server.hasPendingConnections()) {
@@ -258,10 +279,21 @@ void HttpServer::processRequest(QTcpSocket *socket, const QByteArray &request) {
     }
 
     if (path == "/api/status" && method == "GET") {
+        bool running = false;
+        int clients = 0;
+        if (m_wsWorker) {
+            QMetaObject::invokeMethod(m_wsWorker, "isRunning", Qt::BlockingQueuedConnection,
+                                      Q_RETURN_ARG(bool, running));
+            QMetaObject::invokeMethod(m_wsWorker, "clientCount", Qt::BlockingQueuedConnection,
+                                      Q_RETURN_ARG(int, clients));
+        }
         QJsonObject out;
-        out["wsRunning"] = true;
-        out["wsPort"] = 8080;
-        out["wsClients"] = 0;
+        out["wsRunning"] = running;
+        out["wsPort"] = static_cast<int>(WebSocketWorker::kDefaultUiPort);
+        out["wsSecure"] = false;
+        out["wsAgentPort"] = 8080;
+        out["wsAgentSecure"] = true;
+        out["wsClients"] = clients;
         sendJson(socket, out);
         return;
     }
@@ -1046,3 +1078,4 @@ bool HttpServer::handleApiRules(QTcpSocket *socket, const QByteArray &method, co
 
     return false;
 }
+

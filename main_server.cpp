@@ -2,12 +2,18 @@
 #include <QDir>
 #include <QTimer>
 #include <QThread>
+#include <QFile>
+#include <QTextStream>
+#include <QJsonObject>
+#include <QDateTime>
+#include <QUuid>
 
 #include "src/core/Logger.h"
+#include "src/models/Alert.h"
+#include "src/models/Event.h"
 #include "src/services/DatabaseService.h"
 #include "src/managers/AuthManager.h"
 #include "src/services/HttpServer.h"
-#include "src/services/WebSocketService.h"
 #include "src/services/WebSocketWorker.h"
 #include "src/services/ReportService.h"
 #include "src/models/EventListModel.h"
@@ -24,13 +30,44 @@ static QString sharedDbPath()
     return base + "/siemagent.db";
 }
 
+static QString resolveCertFile(const QString &fileName)
+{
+    const QStringList bases = {
+        QDir::current().absolutePath(),
+        QCoreApplication::applicationDirPath(),
+        QDir(QCoreApplication::applicationDirPath()).filePath(".."),
+    };
+    for (const QString &base : bases) {
+        const QString path = QDir(base).filePath(QStringLiteral("certs/") + fileName);
+        if (QFile::exists(path)) return path;
+    }
+    return QDir::current().filePath(QStringLiteral("certs/") + fileName);
+}
+
 int main(int argc, char *argv[]){
     QCoreApplication app(argc, argv);
 
     QCoreApplication::setOrganizationName("SIEMAgent");
     QCoreApplication::setApplicationName("SIEMAgent");
 
+    qRegisterMetaType<Event>("Event");
+    qRegisterMetaType<Alert>("Alert");
+
     Logger::instance().init("logs");
+
+    QFile envFile(".env");
+    if (envFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QTextStream in(&envFile);
+        while (!in.atEnd()) {
+            QString line = in.readLine().trimmed();
+            if (line.isEmpty() || line.startsWith('#')) continue;
+            int eq = line.indexOf('=');
+            if (eq < 0) continue;
+            qputenv(line.left(eq).trimmed().toUtf8(), line.mid(eq + 1).trimmed().toUtf8());
+        }
+        envFile.close();
+        qInfo() << "[CONFIG] .env файл загружен";
+    }
 
     DatabaseService dbService;
     QString dbPath = sharedDbPath();
@@ -40,7 +77,6 @@ int main(int argc, char *argv[]){
         return 1;
     }
 
-    // === Менеджеры и модели ===
     AuthManager authManager(&dbService);
 
     EventListModel  eventListModel(&dbService);
@@ -49,8 +85,8 @@ int main(int argc, char *argv[]){
     UserListModel   userListModel(&dbService);
     RuleListModel   ruleListModel(&dbService);
     ReportService   reportService(&dbService);
+    CorrelationEngine correlationEngine(&dbService);
 
-    // === HTTP ===
     HttpServer httpServer;
     httpServer.setDatabaseService(&dbService);
     httpServer.setAuthManager(&authManager);
@@ -63,68 +99,91 @@ int main(int argc, char *argv[]){
     httpServer.setWebRoot(QDir::current().filePath("web"));
     httpServer.setAllowedOrigin("*");
 
-    if (!httpServer.start(8443)) {
-        qCritical() << "[SERVER] Failed to start HTTP server";
+    quint16 httpPort = 8443;
+    const QByteArray envHttpPort = qgetenv("SIEM_HTTP_PORT");
+    if (!envHttpPort.isEmpty()) httpPort = envHttpPort.toUShort();
+
+    if (!httpServer.startWithFallback(httpPort, &httpPort)) {
         return 1;
     }
 
-    // === WebSocket Worker + CorrelationEngine в ОДНОМ потоке ===
     QThread wsThread;
     WebSocketWorker *wsWorker = new WebSocketWorker();
-    wsWorker->setDatabasePath(dbService.dbPath());
-    wsWorker->setSecret(qgetenv("WS_SECRET"));
+    wsWorker->setSecret(qEnvironmentVariable("SIEM_WS_SECRET"));
     wsWorker->moveToThread(&wsThread);
+    httpServer.setWebSocketWorker(wsWorker);
 
-    // === ИЗМЕНЕНО: CorrelationEngine создаёт свою БД в потоке воркера ===
-    CorrelationEngine *correlationEngine = nullptr;
-    QString dbPathForEngine = dbService.dbPath();  // Сохраняем путь до запуска потока
-    
-    QObject::connect(&wsThread, &QThread::started, [&, dbPathForEngine]() {
-        // Создаём движок БЕЗ БД (nullptr)
-        correlationEngine = new CorrelationEngine(nullptr);
-        
-        // === НОВОЕ: инициализируем БД в текущем потоке ===
-        correlationEngine->initializeDatabase(dbPathForEngine);
-        
-        wsWorker->setCorrelationEngine(correlationEngine);
+    auto processIncomingEvent = [&](const Event &event) {
+        Event ev = event;
+        if (ev.id.isEmpty())
+            ev.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        if (!ev.timestamp.isValid())
+            ev.timestamp = QDateTime::currentDateTimeUtc();
+        if (ev.severity.isEmpty())
+            ev.severity = QStringLiteral("low");
 
-        // Подключаем сигналы через QueuedConnection (между потоками)
-        QObject::connect(correlationEngine, &CorrelationEngine::alertCreated,
-                         &alertListModel, &AlertListModel::appendNew,
-                         Qt::QueuedConnection);
-        QObject::connect(correlationEngine, &CorrelationEngine::alertCreated,
-                         &dashboardStats, &DashboardStatsModel::refresh,
-                         Qt::QueuedConnection);
+        if (!dbService.createEvent(ev)) {
+            qWarning() << "[SERVER] createEvent failed:" << dbService.lastError();
+            return;
+        }
 
-        wsWorker->startServer(8080, true,
-            QDir::current().filePath("certs/server.crt"),
-            QDir::current().filePath("certs/server.key"));
+        eventListModel.appendNew();
+        dashboardStats.onEventReceived();
+        correlationEngine.analyze(ev);
+
+        const QJsonObject json = ev.toJson();
+        QMetaObject::invokeMethod(wsWorker, "broadcastEventJson", Qt::QueuedConnection,
+                                  Q_ARG(QJsonObject, json));
+    };
+
+    QObject::connect(wsWorker, &WebSocketWorker::eventForCorrelation,
+                     &app, processIncomingEvent, Qt::QueuedConnection);
+
+    QObject::connect(&correlationEngine, &CorrelationEngine::alertCreated,
+                     &alertListModel, &AlertListModel::appendNew);
+    QObject::connect(&correlationEngine, &CorrelationEngine::alertCreated,
+                     &dashboardStats, &DashboardStatsModel::onAlertReceived);
+    QObject::connect(&correlationEngine, &CorrelationEngine::alertCreated,
+                     wsWorker, [wsWorker](const Alert &alert) {
+                         const QJsonObject json = alert.toJson();
+                         QMetaObject::invokeMethod(wsWorker, "broadcastAlertJson",
+                                                   Qt::QueuedConnection,
+                                                   Q_ARG(QJsonObject, json));
+                     });
+
+    QObject::connect(wsWorker, &WebSocketWorker::eventReceived,
+                     &eventListModel, &EventListModel::appendNew);
+    QObject::connect(wsWorker, &WebSocketWorker::eventReceived,
+                     &dashboardStats, &DashboardStatsModel::onEventReceived);
+    QObject::connect(wsWorker, &WebSocketWorker::alertReceived,
+                     &alertListModel, &AlertListModel::appendNew);
+    QObject::connect(wsWorker, &WebSocketWorker::alertReceived,
+                     &dashboardStats, &DashboardStatsModel::onAlertReceived);
+
+    const QString certPath = resolveCertFile(QStringLiteral("server.crt"));
+    const QString keyPath  = resolveCertFile(QStringLiteral("server.key"));
+
+    QObject::connect(&wsThread, &QThread::started, wsWorker, [wsWorker, certPath, keyPath]() {
+        if (!wsWorker->startServer(8080, true, certPath, keyPath)) {
+            qCritical() << "[SERVER] Failed to start WebSocket on 8080";
+        }
     });
 
     QObject::connect(&wsThread, &QThread::finished, wsWorker, &WebSocketWorker::stopServer);
     QObject::connect(&wsThread, &QThread::finished, wsWorker, &QObject::deleteLater);
-    if (correlationEngine) {
-        QObject::connect(&wsThread, &QThread::finished, correlationEngine, &QObject::deleteLater);
-    }
-
-    // Приём события — обновляем списки (уже QueuedConnection через moveToThread)
-    QObject::connect(wsWorker, &WebSocketWorker::eventReceived,
-                     &eventListModel, &EventListModel::appendNew);
-    QObject::connect(wsWorker, &WebSocketWorker::eventReceived,
-                     &dashboardStats, &DashboardStatsModel::refresh);
 
     wsThread.start();
 
-    // === Глобальная очистка истории каждые 10 минут ===
+    QTimer chartRefreshTimer;
+    QObject::connect(&chartRefreshTimer, &QTimer::timeout,
+                     &dashboardStats, &DashboardStatsModel::refreshCharts);
+    chartRefreshTimer.start(30'000);
+
     QTimer cleanupTimer;
-    // ИЗМЕНЕНО: cleanup через invokeMethod, потому что correlationEngine в другом потоке
-    QObject::connect(&cleanupTimer, &QTimer::timeout, [&]() {
-        if (correlationEngine) {
-            QMetaObject::invokeMethod(correlationEngine, "globalCleanup", Qt::QueuedConnection);
-        }
-    });
+    QObject::connect(&cleanupTimer, &QTimer::timeout,
+                     &correlationEngine, &CorrelationEngine::globalCleanup);
     cleanupTimer.start(10 * 60 * 1000);
 
-    qInfo() << "[SERVER] ready";
+    qInfo() << "[SERVER] ready — HTTP:" << httpPort << "WS:8080 UI-WS:8081";
     return app.exec();
 }

@@ -28,6 +28,6 @@ public:
 
 };
 
-
+Q_DECLARE_METATYPE(Alert)
 
 #endif

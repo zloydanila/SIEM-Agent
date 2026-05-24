@@ -49,7 +49,7 @@ function downloadBlob(path, filename) {
   return fetch(`${API_BASE}${path}`, {
     headers: authHeaders(),
     credentials: "include"
-  }).then(async res => {
+  }).then(async (res) => {
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       throw new Error(text || `HTTP ${res.status}`);
@@ -112,13 +112,13 @@ export const alerts = () => request("/api/alerts");
 export const rules = () => request("/api/rules");
 export const status = () => request("/api/status");
 
-export const createUser = payload =>
+export const createUser = (payload) =>
   request("/api/users", { method: "POST", body: JSON.stringify(payload) });
 
 export const updateUser = (id, payload) =>
   request(`/api/users/${id}`, { method: "PUT", body: JSON.stringify(payload) });
 
-export const deleteUser = id =>
+export const deleteUser = (id) =>
   request(`/api/users/${id}`, { method: "DELETE" });
 
 export async function changePassword(currentPassword, newPassword) {
@@ -133,13 +133,13 @@ export async function changePassword(currentPassword, newPassword) {
 export const clearEvents = () => request("/api/events", { method: "DELETE" });
 export const clearAlerts = () => request("/api/alerts", { method: "DELETE" });
 
-export const createRule = payload =>
+export const createRule = (payload) =>
   request("/api/rules", { method: "POST", body: JSON.stringify(payload) });
 
 export const updateRule = (id, payload) =>
   request(`/api/rules/${id}`, { method: "PUT", body: JSON.stringify(payload) });
 
-export const deleteRule = id =>
+export const deleteRule = (id) =>
   request(`/api/rules/${id}`, { method: "DELETE" });
 
 export const toggleRule = (id, enabled) =>

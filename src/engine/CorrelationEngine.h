@@ -27,7 +27,7 @@ public:
     void initializeDatabase(const QString &dbPath);
 
 signals:
-    void alertCreated();
+    void alertCreated(const Alert &alert);
 
 private:
 

@@ -24,7 +24,6 @@ public:
 
 };
 
-
-
+Q_DECLARE_METATYPE(Event)
 
 #endif

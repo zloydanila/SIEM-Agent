@@ -1637,40 +1637,40 @@ Item {
 
                             Rectangle {
                                 Layout.fillWidth: true; height: 34; radius: theme.radiusMedium
-                                color: expEvMouse.pressed ? theme.accentDark : expEvMouse.containsMouse ? theme.accentHover : theme.accent
+                                color: expEvMouse.pressed ? "#1f6feb" : expEvMouse.containsMouse ? "#79c0ff" : "#58a6ff"
                                 Behavior on color { ColorAnimation { duration: theme.animFast } }
                                 MouseArea {
                                     id: expEvMouse; anchors.fill: parent; hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: reportService.exportEventsCsv(reportService.defaultExportPath("events"))
                                 }
-                                Text { anchors.centerIn: parent; text: "События (CSV)"; color: theme.bgPrimary
+                                Text { anchors.centerIn: parent; text: "События (CSV)"; color: "#ffffff"
                                        font.pixelSize: theme.fontSizeXS; font.bold: true; font.family: theme.fontFamily }
                             }
 
                             Rectangle {
                                 Layout.fillWidth: true; height: 34; radius: theme.radiusMedium
-                                color: expAlMouse.pressed ? theme.accentDark : expAlMouse.containsMouse ? theme.accentHover : theme.accent
+                                color: expAlMouse.pressed ? "#1f6feb" : expAlMouse.containsMouse ? "#79c0ff" : "#58a6ff"
                                 Behavior on color { ColorAnimation { duration: theme.animFast } }
                                 MouseArea {
                                     id: expAlMouse; anchors.fill: parent; hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: reportService.exportAlertsCsv(reportService.defaultExportPath("alerts"))
                                 }
-                                Text { anchors.centerIn: parent; text: "Алерты (CSV)"; color: theme.bgPrimary
+                                Text { anchors.centerIn: parent; text: "Алерты (CSV)"; color: "#ffffff"
                                        font.pixelSize: theme.fontSizeXS; font.bold: true; font.family: theme.fontFamily }
                             }
 
                             Rectangle {
                                 Layout.fillWidth: true; height: 34; radius: theme.radiusMedium
-                                color: expRpMouse.pressed ? theme.accentDark : expRpMouse.containsMouse ? theme.accentHover : theme.accent
+                                color: expRpMouse.pressed ? "#1f6feb" : expRpMouse.containsMouse ? "#79c0ff" : "#58a6ff"
                                 Behavior on color { ColorAnimation { duration: theme.animFast } }
                                 MouseArea {
                                     id: expRpMouse; anchors.fill: parent; hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: reportService.exportReportJson(reportService.defaultExportPath("report"))
                                 }
-                                Text { anchors.centerIn: parent; text: "Отчет (JSON)"; color: theme.bgPrimary
+                                Text { anchors.centerIn: parent; text: "Отчет (JSON)"; color: "#ffffff"
                                        font.pixelSize: theme.fontSizeXS; font.bold: true; font.family: theme.fontFamily }
                             }
                         }

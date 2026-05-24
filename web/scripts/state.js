@@ -4,7 +4,8 @@ export const state = {
   currentUser: null,
   mustChangePassword: localStorage.getItem("mustChangePassword") === "true",
   wsConnected: false,
-  wsPort: 8080,
+  wsPort: 8081,
+  wsSecure: false,
   wsClients: 0,
   dashboard: {
     stats: {},
@@ -58,7 +59,7 @@ export function setState(patch) {
     }
   }
 
-  if (!changed) return;
+  if (!changed) return; // ← ВОТ ЭТО! Выходим если ничего не изменилось
 
   if ("currentUser" in patch) {
     const actualUser = patch.currentUser?.user || patch.currentUser || null;
@@ -71,7 +72,7 @@ export function setState(patch) {
   }
 
   state.lastUpdated = Date.now();
-  state.dataVersion++;
+  state.dataVersion++; // ← теперь только если РЕАЛЬНО изменилось
   notify();
 }
 
@@ -86,7 +87,7 @@ export function setDashboard(patch) {
     }
   }
 
-  if (!changed) return;
+  if (!changed) return; // ← ВОТ ЭТО! Выходим если ничего не изменилось
 
   state.dashboard = next;
   state.lastUpdated = Date.now();
@@ -123,7 +124,8 @@ export function clearSession() {
   state.currentUser = null;
   state.mustChangePassword = false;
   state.wsConnected = false;
-  state.wsPort = 8080;
+  state.wsPort = 8081;
+  state.wsSecure = false;
   state.wsClients = 0;
   state.dashboard = {
     stats: {},

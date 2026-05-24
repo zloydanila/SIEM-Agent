@@ -34,6 +34,9 @@ public:
     QStringList activityLabels() const { return m_activityLabels; }
 
     Q_INVOKABLE void refresh();
+    Q_INVOKABLE void refreshCharts();
+    Q_INVOKABLE void onEventReceived();
+    Q_INVOKABLE void onAlertReceived();
     Q_INVOKABLE void clearEvents();
     Q_INVOKABLE void clearAlerts();
 

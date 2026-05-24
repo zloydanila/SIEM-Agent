@@ -1,7 +1,8 @@
 #include "WebSocketService.h"
 #include "WebSocketWorker.h"
-#include "DatabaseService.h"
 #include <QDebug>
+#include <QJsonObject>
+#include <QMetaObject>
 
 WebSocketService::WebSocketService(quint16 port, QObject *parent)
     : QObject(parent), m_port(port)
@@ -10,21 +11,21 @@ WebSocketService::WebSocketService(quint16 port, QObject *parent)
     m_worker = new WebSocketWorker();
     m_worker->moveToThread(m_thread);
 
-    connect(this,     &WebSocketService::startServerRequested,
+    connect(this, &WebSocketService::startServerRequested,
             m_worker, &WebSocketWorker::startServer);
-    connect(this,     &WebSocketService::stopServerRequested,
+    connect(this, &WebSocketService::stopServerRequested,
             m_worker, &WebSocketWorker::stopServer);
 
     connect(m_worker, &WebSocketWorker::eventReceived,
-            this,     &WebSocketService::eventReceived);
+            this, &WebSocketService::eventReceived);
     connect(m_worker, &WebSocketWorker::alertReceived,
-            this,     &WebSocketService::alertReceived);
+            this, &WebSocketService::alertReceived);
     connect(m_worker, &WebSocketWorker::eventForCorrelation,
-            this,     &WebSocketService::eventForCorrelation);
+            this, &WebSocketService::eventForCorrelation);
     connect(m_worker, &WebSocketWorker::isRunningChanged,
-            this,     &WebSocketService::isRunningChanged);
+            this, &WebSocketService::isRunningChanged);
     connect(m_worker, &WebSocketWorker::clientCountChanged,
-            this,     &WebSocketService::clientCountChanged);
+            this, &WebSocketService::clientCountChanged);
 
     connect(m_thread, &QThread::finished,
             m_worker, &QObject::deleteLater);
@@ -39,7 +40,16 @@ WebSocketService::~WebSocketService() {
 }
 
 bool WebSocketService::isRunning() const {
-    return m_worker && m_worker->isRunning();
+    if (!m_worker) return false;
+    return m_worker->isRunning();
+}
+
+bool WebSocketService::isClientConnected() const {
+    return m_worker && m_worker->isClientConnected();
+}
+
+quint16 WebSocketService::uiPort() const {
+    return m_worker ? m_worker->uiPort() : 8081;
 }
 
 int WebSocketService::clientCount() const {
@@ -56,14 +66,20 @@ void WebSocketService::setSharedSecret(const QString &secret) {
     }, Qt::QueuedConnection);
 }
 
-void WebSocketService::setDatabaseService(DatabaseService *dbService) {
-    QString path = dbService->dbPath();
-    QMetaObject::invokeMethod(m_worker, [this, path]() {
-        m_worker->setDatabasePath(path);
+void WebSocketService::start(const QString &certPath, const QString &keyPath) {
+    const bool useWss = !certPath.isEmpty() && !keyPath.isEmpty();
+    emit startServerRequested(m_port, useWss, certPath, keyPath);
+}
+
+void WebSocketService::connectAsClient(const QString &host, quint16 port, bool secure) {
+    QMetaObject::invokeMethod(m_worker, [this, host, port, secure]() {
+        m_worker->connectAsClient(host, port, secure);
     }, Qt::QueuedConnection);
 }
 
-void WebSocketService::start(const QString &certPath, const QString &keyPath) {
-    bool useWss = !certPath.isEmpty() && !keyPath.isEmpty();
-    emit startServerRequested(m_port, useWss, certPath, keyPath);
+void WebSocketService::broadcastEvent(const QJsonObject &eventJson) {
+    if (!m_worker) return;
+
+    QMetaObject::invokeMethod(m_worker, "broadcastEventJson", Qt::QueuedConnection,
+                              Q_ARG(QJsonObject, eventJson));
 }

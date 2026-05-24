@@ -92,7 +92,12 @@ bool DatabaseService::openWithPath(const QString &path) {
     }
 
     m_opened = true;
-    return initSchema();
+    if (!initSchema()) return false;
+
+    QSqlQuery pragma(database());
+    pragma.exec("PRAGMA journal_mode=WAL");
+    pragma.exec("PRAGMA synchronous=NORMAL");
+    return true;
 }
 
 QString DatabaseService::dbPath() const {
@@ -224,40 +229,40 @@ void DatabaseService::seedDefaultRules() {
 
     const QVector<SeedRule> seeds = {
         {
-            "Critical events threshold",
+            "Brute force detection",
             "threshold",
-            "critical",
+            "brute_force",
             "",
-            1,
-            60,
-            60,
+            3,
+            300,
+            120,
             "high",
-            "Critical event detected",
-            "A critical event was generated"
+            "Brute force attack",
+            "Multiple brute-force login attempts detected"
         },
         {
-            "Multiple login failures",
+            "Auth failure burst",
             "threshold",
-            "auth_failed",
+            "auth_failure",
             "",
             5,
             300,
-            300,
-            "high",
-            "Repeated authentication failures",
-            "Several failed logins were detected within a short time"
+            180,
+            "medium",
+            "Authentication failures",
+            "Repeated authentication failures on the same device"
         },
         {
-            "Suspicious access correlation",
+            "Unauthorized access correlation",
             "correlation",
-            "file_access",
-            "privilege_escalation",
+            "unauthorized_access",
+            "network_scan",
             1,
             600,
-            600,
+            300,
             "high",
             "Suspicious access pattern",
-            "File access followed by privilege escalation"
+            "Unauthorized access combined with network scan activity"
         }
     };
 
@@ -757,7 +762,10 @@ bool DatabaseService::createAlert(const Alert &alert) {
     q.bindValue(":rule_id", alert.ruleId);
     q.bindValue(":assigned_to", alert.assignedTo);
     q.bindValue(":comment", alert.comment);
-    q.bindValue(":related_event_ids", alert.relatedEventIds.join(","));
+    const QString relatedIds = alert.relatedEventIds.isEmpty()
+        ? QStringLiteral("[]")
+        : alert.relatedEventIds.join(QLatin1Char(','));
+    q.bindValue(":related_event_ids", relatedIds);
     if (!q.exec()) { m_lastError = q.lastError().text(); return false; }
     return true;
 }
@@ -789,7 +797,10 @@ bool DatabaseService::updateAlert(const Alert &alert) {
     q.bindValue(":rule_id", alert.ruleId);
     q.bindValue(":assigned_to", alert.assignedTo);
     q.bindValue(":comment", alert.comment);
-    q.bindValue(":related_event_ids", alert.relatedEventIds.join(","));
+    const QString relatedIdsUpdate = alert.relatedEventIds.isEmpty()
+        ? QStringLiteral("[]")
+        : alert.relatedEventIds.join(QLatin1Char(','));
+    q.bindValue(":related_event_ids", relatedIdsUpdate);
     if (!q.exec()) { m_lastError = q.lastError().text(); return false; }
     return q.numRowsAffected() > 0;
 }

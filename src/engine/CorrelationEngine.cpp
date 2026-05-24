@@ -126,14 +126,21 @@ void CorrelationEngine::analyze(const Event &event) {
         if (m_db->createAlert(alert)) {
             qDebug() << "[CorrelationEngine] Auto-alert created for HIGH/CRITICAL event:"
                      << event.deviceName << "severity=" << event.severity;
-            emit alertCreated();
+            emit alertCreated(alert);
+        } else {
+            qWarning() << "[CorrelationEngine] Failed to create severity alert:" << m_db->lastError();
         }
     }
 }
 
+static bool eventMatchesRuleTarget(const Event &event, const QString &matchTarget) {
+    return event.eventType.compare(matchTarget, Qt::CaseInsensitive) == 0
+        || event.severity.compare(matchTarget, Qt::CaseInsensitive) == 0;
+}
+
 void CorrelationEngine::analyzeThreshold(const Rule &rule, const Event &event, const EventRecord &record) {
     Q_UNUSED(record);
-    if (event.eventType != rule.matchEventType) return;
+    if (!eventMatchesRuleTarget(event, rule.matchEventType)) return;
 
     pruneHistory(event.deviceName, rule.windowSeconds);
     int count = countMatches(event.deviceName, rule.matchEventType, rule.windowSeconds);
@@ -144,14 +151,16 @@ void CorrelationEngine::analyzeThreshold(const Rule &rule, const Event &event, c
             if (m_db->createAlert(alert)) {
                 qDebug() << "[CorrelationEngine] Alert fired:" << rule.name << "on" << event.deviceName;
                 setCooldown(rule.id, event.deviceName, rule.cooldownSeconds);
-                emit alertCreated();
+                emit alertCreated(alert);
+            } else {
+                qWarning() << "[CorrelationEngine] Failed to create rule alert:" << m_db->lastError();
             }
         }
     }
 }
 
 void CorrelationEngine::analyzeCorrelation(const Rule &rule, const Event &event) {
-    if (event.eventType != rule.matchEventType) return;
+    if (!eventMatchesRuleTarget(event, rule.matchEventType)) return;
 
     pruneHistory(event.deviceName, rule.windowSeconds);
     int contextCount = countMatches(event.deviceName, rule.secondaryEventType, rule.windowSeconds);
@@ -162,7 +171,9 @@ void CorrelationEngine::analyzeCorrelation(const Rule &rule, const Event &event)
             if (m_db->createAlert(alert)) {
                 qDebug() << "[CorrelationEngine] Correlation alert fired:" << rule.name << "on" << event.deviceName;
                 setCooldown(rule.id, event.deviceName, rule.cooldownSeconds);
-                emit alertCreated();
+                emit alertCreated(alert);
+            } else {
+                qWarning() << "[CorrelationEngine] Failed to create correlation alert:" << m_db->lastError();
             }
         }
     }

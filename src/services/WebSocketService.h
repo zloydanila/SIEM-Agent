@@ -6,9 +6,8 @@
 #include <QThread>
 #include "../models/Event.h"
 
+class QJsonObject;
 class WebSocketWorker;
-class DatabaseService;
-class CorrelationEngine;
 
 class WebSocketService : public QObject {
     Q_OBJECT
@@ -22,13 +21,16 @@ public:
     ~WebSocketService();
 
     bool isRunning() const;
+    bool isClientConnected() const;
     int clientCount() const;
     quint16 port() const;
+    quint16 uiPort() const;
 
     void setSharedSecret(const QString &secret);
-    void setDatabaseService(DatabaseService *dbService);
 
     void start(const QString &certPath = "", const QString &keyPath = "");
+    void connectAsClient(const QString &host = QStringLiteral("127.0.0.1"), quint16 port = 8081, bool secure = false);
+    void broadcastEvent(const QJsonObject &eventJson);
 
 signals:
     void startServerRequested(quint16 port, bool useWss,

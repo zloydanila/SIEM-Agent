@@ -11,25 +11,28 @@
 #include <QQueue>
 #include <QDateTime>
 #include "../models/Event.h"
-#include "../engine/CorrelationEngine.h"
-
-class DatabaseService;
 
 class WebSocketWorker : public QObject {
     Q_OBJECT
 
 public:
+    static constexpr quint16 kDefaultUiPort = 8081;
+
     explicit WebSocketWorker(QObject *parent = nullptr);
     ~WebSocketWorker();
 
-    void setDatabasePath(const QString &dbPath);
     void setSecret(const QString &secret);
 
-    bool isRunning() const;
-    int clientCount() const;
-    void setCorrelationEngine(CorrelationEngine *engine);
+    Q_INVOKABLE bool isRunning() const;
+    Q_INVOKABLE bool isClientConnected() const;
+    Q_INVOKABLE int clientCount() const;
+    quint16 uiPort() const;
 
 public slots:
+    void connectAsClient(const QString &host, quint16 port, bool secure = false);
+    void disconnectClient();
+    void broadcastAlertJson(const QJsonObject &alertJson);
+    void broadcastEventJson(const QJsonObject &eventJson);
     bool startServer(quint16 port, bool useWss = false,
                      const QString &certPath = "", const QString &keyPath = "");
     void stopServer();
@@ -43,24 +46,36 @@ signals:
     void eventForCorrelation(const Event &event);
 
 private slots:
-    void onNewConnection();
+    void onNewAgentConnection();
+    void onNewUiConnection();
     void onTextMessageReceived(const QString &message);
-    void onClientDisconnected();
+    void onAgentDisconnected();
+    void onUiDisconnected();
 
 private:
     bool validateMessage(const QJsonObject &json);
     bool checkRateLimit(const QString &ip);
     bool verifyHmac(const QJsonObject &json);
-    void broadcastJson(const QJsonObject &message, QWebSocket *except = nullptr);
-    void processCorrelation(const Event &event);
+
+    void broadcastJsonToUi(const QJsonObject &message);
+    void updateRunningState();
+    void cleanupSockets(QList<QWebSocket*> &list);
+
+    void handleUiMessage(const QString &message);
+    void onClientSocketMessage(const QString &message);
 
     QWebSocketServer *m_server = nullptr;
-    QList<QWebSocket*> m_clients;
-    DatabaseService *m_dbService = nullptr;
-    QString m_dbPath;
+    QWebSocketServer *m_uiServer = nullptr;
 
+    QList<QWebSocket*> m_agentClients;
+    QList<QWebSocket*> m_uiClients;
+
+    QWebSocket *m_clientSocket = nullptr;
+    bool m_clientConnected = false;
     bool m_running = false;
     QString m_secret;
+
+    QWebSocket *m_lastAgentSocket = nullptr;
 
     struct NonceEntry { qint64 timestamp; };
     static constexpr qint64 NONCE_TTL_MS = 10 * 60 * 1000;
@@ -68,8 +83,6 @@ private:
     static constexpr int NONCE_TRIM_TO = 8000;
     mutable QHash<QString, NonceEntry> m_usedNonces;
     mutable QQueue<QString> m_nonceLRU;
-
-    CorrelationEngine *m_correlationEngine = nullptr;
 
     struct ClientState {
         QQueue<qint64> timestamps;

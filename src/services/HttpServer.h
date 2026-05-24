@@ -16,6 +16,7 @@ class EventListModel;
 class AlertListModel;
 class UserListModel;
 class RuleListModel;
+class WebSocketWorker;
 
 class HttpServer : public QObject {
     Q_OBJECT
@@ -23,6 +24,7 @@ public:
     explicit HttpServer(QObject *parent = nullptr);
 
     bool start(quint16 port);
+    bool startWithFallback(quint16 preferredPort, quint16 *boundPort = nullptr);
     void stop();
 
     void setDatabaseService(DatabaseService *db);
@@ -35,6 +37,7 @@ public:
     void setRuleListModel(RuleListModel *rules);
     void setWebRoot(const QString &root);
     void setAllowedOrigin(const QString &origin);
+    void setWebSocketWorker(WebSocketWorker *worker);
     QJsonArray eventsJson(int limit, int offset) const; 
 
 signals:
@@ -70,6 +73,7 @@ private:
     AlertListModel *m_alerts = nullptr;
     UserListModel *m_users = nullptr;
     RuleListModel *m_rules = nullptr;
+    WebSocketWorker *m_wsWorker = nullptr;
 
     QString m_webRoot;
     QString m_allowedOrigin = "*";

@@ -8,6 +8,8 @@
 #include <QJsonObject>
 #include <QTextStream>
 #include <QDir>
+#include <QUuid>
+#include <QDateTime>
 
 #include "src/services/DatabaseService.h"
 #include "src/managers/AuthManager.h"
@@ -20,12 +22,12 @@
 #include "src/models/AlertFilterProxyModel.h"
 #include "src/engine/CorrelationEngine.h"
 #include "src/models/Event.h"
+#include "src/models/Alert.h"
 #include "src/core/Logger.h"
 #include "src/services/ReportService.h"
 
 static constexpr quint16 WS_PORT = 8080;
 
-// === ИЗМЕНЕНО: единый путь к БД для десктопа и сервера ===
 static QString sharedDbPath()
 {
     QString base = QDir::homePath() + "/.local/share/SIEMAgent";
@@ -33,8 +35,25 @@ static QString sharedDbPath()
     return base + "/siemagent.db";
 }
 
+static QString resolveCertFile(const QString &fileName)
+{
+    const QStringList bases = {
+        QDir::current().absolutePath(),
+        QCoreApplication::applicationDirPath(),
+        QDir(QCoreApplication::applicationDirPath()).filePath(".."),
+    };
+    for (const QString &base : bases) {
+        const QString path = QDir(base).filePath(QStringLiteral("certs/") + fileName);
+        if (QFile::exists(path)) return path;
+    }
+    return QDir::current().filePath(QStringLiteral("certs/") + fileName);
+}
+
 int main(int argc, char *argv[])
 {
+    qRegisterMetaType<Event>("Event");
+    qRegisterMetaType<Alert>("Alert");
+
     Logger::instance().init("logs");
 
     QFile envFile(".env");
@@ -58,7 +77,6 @@ int main(int argc, char *argv[])
     QCoreApplication::setOrganizationName("SIEMAgent");
     QCoreApplication::setApplicationName("SIEMAgent");
 
-    // === ИЗМЕНЕНО: используем sharedDbPath() вместо defaultDbPath() ===
     DatabaseService dbService("siem_ui_connection");
     if (!dbService.openWithPath(sharedDbPath())) {
         qDebug() << "DB open error:" << dbService.lastError();
@@ -67,10 +85,12 @@ int main(int argc, char *argv[])
 
     ReportService reportService(&dbService);
 
-    QString certPath = "certs/server.crt";
-    QString keyPath  = "certs/server.key";
+    QString certPath = resolveCertFile(QStringLiteral("server.crt"));
+    QString keyPath  = resolveCertFile(QStringLiteral("server.key"));
 
-    QFile configFile("data/config/app_config.json");
+    QFile configFile(QDir::current().filePath("data/config/app_config.json"));
+    if (!configFile.exists())
+        configFile.setFileName(resolveCertFile(QStringLiteral("../data/config/app_config.json")));
     if (configFile.open(QIODevice::ReadOnly)) {
         QJsonObject config = QJsonDocument::fromJson(configFile.readAll()).object();
         certPath = config.value("cert_path").toString(certPath);
@@ -88,7 +108,6 @@ int main(int argc, char *argv[])
 
     WebSocketService wsService(WS_PORT);
     wsService.setSharedSecret(wsSecret);
-    wsService.setDatabaseService(&dbService);
 
     AuthManager  authManager(&dbService);
     UserListModel userListModel(&dbService);
@@ -105,28 +124,49 @@ int main(int argc, char *argv[])
                      &correlationEngine, &CorrelationEngine::globalCleanup);
     cleanupTimer->start(300'000);
 
+    auto processIncomingEvent = [&](const Event &event) {
+        Event ev = event;
+        if (ev.id.isEmpty())
+            ev.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        if (!ev.timestamp.isValid())
+            ev.timestamp = QDateTime::currentDateTimeUtc();
+        if (ev.severity.isEmpty())
+            ev.severity = QStringLiteral("low");
+
+        if (!dbService.createEvent(ev)) {
+            qWarning() << "[DESKTOP] createEvent failed:" << dbService.lastError();
+            return;
+        }
+
+        eventListModel.appendNew();
+        statsModel.onEventReceived();
+        correlationEngine.analyze(ev);
+
+        if (wsService.isRunning() || wsService.isClientConnected())
+            wsService.broadcastEvent(ev.toJson());
+    };
+
+    QObject::connect(&wsService, &WebSocketService::eventForCorrelation,
+                     &app, processIncomingEvent, Qt::QueuedConnection);
+
     QObject::connect(&wsService, &WebSocketService::eventReceived,
                      &eventListModel, &EventListModel::appendNew);
     QObject::connect(&wsService, &WebSocketService::eventReceived,
-                     &statsModel,    &DashboardStatsModel::refresh);
+                     &statsModel,    &DashboardStatsModel::onEventReceived);
     QObject::connect(&wsService, &WebSocketService::alertReceived,
-                     &alertListModel, &AlertListModel::refresh);
+                     &alertListModel, &AlertListModel::appendNew);
     QObject::connect(&wsService, &WebSocketService::alertReceived,
-                     &statsModel,    &DashboardStatsModel::refresh);
+                     &statsModel,    &DashboardStatsModel::onAlertReceived);
 
     QObject::connect(&correlationEngine, &CorrelationEngine::alertCreated,
-                     &alertListModel,    &AlertListModel::refresh);
+                     &alertListModel,    &AlertListModel::appendNew);
     QObject::connect(&correlationEngine, &CorrelationEngine::alertCreated,
-                     &statsModel,        &DashboardStatsModel::refresh);
+                     &statsModel,        &DashboardStatsModel::onAlertReceived);
 
     QObject::connect(&statsModel, &DashboardStatsModel::eventsCleared,
                      &eventListModel, &EventListModel::refresh);
     QObject::connect(&statsModel, &DashboardStatsModel::alertsCleared,
                      &alertListModel, &AlertListModel::refresh);
-
-    QObject::connect(&wsService, &WebSocketService::eventForCorrelation,
-                 &correlationEngine, &CorrelationEngine::analyze,
-                 Qt::QueuedConnection);
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("authManager",         &authManager);
@@ -140,7 +180,10 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("wsPort",              static_cast<int>(WS_PORT));
     engine.rootContext()->setContextProperty("reportService", &reportService);
 
-    qRegisterMetaType<Event>("Event");
+    QTimer chartRefreshTimer;
+    QObject::connect(&chartRefreshTimer, &QTimer::timeout,
+                     &statsModel, &DashboardStatsModel::refreshCharts);
+    chartRefreshTimer.start(30'000);
 
     qmlRegisterSingletonType(
         QUrl("qrc:/qml/styles/Utils.qml"),
@@ -148,6 +191,14 @@ int main(int argc, char *argv[])
     );
 
     wsService.start(certPath, keyPath);
+
+    QTimer::singleShot(600, &wsService, [&wsService]() {
+        if (!wsService.isRunning()) {
+            qInfo() << "[WS] Порт агента занят — подключаемся к серверу как клиент (wss://127.0.0.1:"
+                    << wsService.uiPort() << ")";
+            wsService.connectAsClient(QStringLiteral("127.0.0.1"), wsService.uiPort());
+        }
+    });
 
     const QUrl url(QStringLiteral("qrc:/qml/main.qml"));
     engine.load(url);

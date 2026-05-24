@@ -1,8 +1,9 @@
-import { alerts as loadAlerts, updateAlertStatus } from "../api.js";
+import { updateAlertStatus } from "../api.js";
 import { showToast } from "../components/toast.js";
 import { state, setAlertsFilter } from "../state.js";
 
-export async function renderAlerts({
+// Чистая рендер-функция — данные только из пропсов, никаких fetch внутри
+export function renderAlerts({
   alerts: initialAlerts = [],
   currentUser = {},
   canUpdateAlertStatus = false,
@@ -11,18 +12,8 @@ export async function renderAlerts({
 } = {}) {
   const root = document.createElement("div");
   root.className = "page-inner";
-
-  let data = Array.isArray(initialAlerts) ? initialAlerts : [];
-  let error = null;
+  const data = Array.isArray(initialAlerts) ? initialAlerts : [];
   let activeFilter = alertsFilter || state.alertsFilter || "";
-
-  if (!data.length) {
-    try {
-      data = await loadAlerts();
-    } catch (e) {
-      error = e.message;
-    }
-  }
 
   root.innerHTML = `
     <section class="page-section">
@@ -31,7 +22,6 @@ export async function renderAlerts({
           <h2>Алерты</h2>
           <p id="alertsCount">Всего: ${data.length}</p>
         </div>
-
         <div class="page-actions">
           ${!canUpdateAlertStatus ? `<div class="role-badge">Только просмотр</div>` : ""}
           <div class="filter-pills">
@@ -42,9 +32,6 @@ export async function renderAlerts({
           </div>
         </div>
       </div>
-
-      ${error ? `<div class="page-note" style="border-color:var(--danger);color:var(--danger);">Ошибка: ${esc(error)}</div>` : ""}
-
       <div id="alertsContainer" class="content-gap"></div>
     </section>
   `;
@@ -59,28 +46,21 @@ export async function renderAlerts({
 
   function renderContent() {
     const list = filtered();
-
     container.innerHTML = list.length
       ? list.map(al => {
           const status = String(al.status || "").toLowerCase();
-
           const actions = canUpdateAlertStatus
             ? status === "open"
-              ? `
-                <div class="alert-card-actions">
+              ? `<div class="alert-card-actions">
                   <button class="alert-action-btn warning" data-id="${al.id}" data-action="investigate">Взять в работу</button>
                   <button class="alert-action-btn success" data-id="${al.id}" data-action="close">Закрыть</button>
-                </div>
-              `
+                 </div>`
               : status === "investigating"
-                ? `
-                  <div class="alert-card-actions">
+                ? `<div class="alert-card-actions">
                     <button class="alert-action-btn success" data-id="${al.id}" data-action="close">Закрыть</button>
-                  </div>
-                `
+                   </div>`
                 : ""
             : "";
-
           return `
             <div class="alert-card">
               <div class="alert-severity-bar" style="background:${sevColor(al.severity)};"></div>
@@ -90,9 +70,7 @@ export async function renderAlerts({
                   <span class="badge ${sevBadgeClass(al.severity)}">${sevLabel(al.severity)}</span>
                   <span class="badge ${statusBadgeClass(al.status)}">${statusLabel(al.status)}</span>
                 </div>
-
                 <div class="alert-card-desc">${esc(al.description || "")}</div>
-
                 <div class="alert-card-meta">
                   <span>Устройство: ${esc(al.deviceName || al.device || "—")}</span>
                   <span>Время: ${esc(formatTime(al.triggeredAt || al.time || ""))}</span>
@@ -112,11 +90,9 @@ export async function renderAlerts({
     btn.addEventListener("click", () => {
       activeFilter = btn.dataset.filter;
       setAlertsFilter(activeFilter);
-
       root.querySelectorAll("[data-filter]").forEach(b => {
         b.classList.toggle("active", b.dataset.filter === activeFilter);
       });
-
       renderContent();
     });
   });
@@ -124,11 +100,9 @@ export async function renderAlerts({
   container.addEventListener("click", e => {
     const btn = e.target.closest("[data-action]");
     if (!btn || !canUpdateAlertStatus) return;
-
     const id = btn.dataset.id;
     const action = btn.dataset.action;
     const newStatus = action === "investigate" ? "investigating" : "closed";
-
     (async () => {
       try {
         await updateAlertStatus(id, newStatus);
@@ -151,7 +125,6 @@ function sevColor(s) {
   if (v === "medium") return "#58a6ff";
   return "#3fb950";
 }
-
 function sevBadgeClass(s) {
   const v = String(s || "").toLowerCase();
   if (v === "critical") return "danger";
@@ -159,7 +132,6 @@ function sevBadgeClass(s) {
   if (v === "medium") return "accent";
   return "success";
 }
-
 function sevLabel(s) {
   const v = String(s || "").toLowerCase();
   if (v === "critical") return "КРИТИЧНО";
@@ -167,14 +139,12 @@ function sevLabel(s) {
   if (v === "medium") return "СРЕДНИЙ";
   return "НИЗКИЙ";
 }
-
 function statusBadgeClass(s) {
   const v = String(s || "").toLowerCase();
   if (v === "open") return "warning";
   if (v === "investigating") return "accent";
   return "success";
 }
-
 function statusLabel(s) {
   const v = String(s || "").toLowerCase();
   if (v === "open") return "Открыт";
@@ -182,11 +152,9 @@ function statusLabel(s) {
   if (v === "closed") return "Закрыт";
   return s || "";
 }
-
 function formatTime(ts) {
   return ts ? String(ts).replace("T", " ").substring(0, 19) : "";
 }
-
 function esc(v) {
   return String(v ?? "")
     .replaceAll("&", "&amp;")

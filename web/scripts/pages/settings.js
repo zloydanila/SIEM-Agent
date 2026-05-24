@@ -6,7 +6,6 @@ import {
   exportEventsCsv,
   exportAlertsCsv,
   exportReportJson,
-  rules as loadRules,
   status as loadStatus,
   createRule,
   updateRule,
@@ -34,132 +33,164 @@ export async function renderSettings({
   onRefresh
 } = {}) {
   const root = document.createElement("div");
-  root.className = "page-inner";
+  root.className = "page-inner settings-page";
 
   let rulesData = Array.isArray(initialRules) ? initialRules : [];
-  let data = { totalEvents: 0, totalAlerts: 0 };
   let wsStatus = { wsRunning: false, wsPort: 8080, wsClients: 0 };
 
   try {
     wsStatus = await loadStatus();
   } catch (_) {}
 
-  try {
-    const [ev, al] = await Promise.all([
-      fetchCount("/api/events"),
-      fetchCount("/api/alerts")
-    ]);
-    data.totalEvents = ev;
-    data.totalAlerts = al;
-  } catch (_) {}
-
-  if (canAccessRules && !rulesData.length) {
-    try {
-      rulesData = await loadRules();
-    } catch (_) {
-      rulesData = [];
-    }
-  }
-
   const forcedPasswordNotice = mustChangePassword
-    ? `<div class="page-note" style="border-color:var(--warning);color:var(--warning);margin-top:16px;">
-         Требуется обязательная смена пароля. Пока пароль не будет изменён, работа с системой заблокирована.
-       </div>`
+    ? `
+      <div class="page-note settings-warning-note">
+        Требуется обязательная смена пароля. Пока пароль не будет изменён, работа с системой заблокирована.
+      </div>
+    `
     : "";
 
   root.innerHTML = `
-    <section class="page-section">
-      <div class="page-hero">
+    <section class="page-section settings-section">
+      <div class="settings-page-top">
         <div>
-          <h2>Настройки</h2>
-          <p>System information and data management</p>
+          <h2 class="settings-page-title">Настройки</h2>
+          <p class="settings-page-subtitle">System information and data management</p>
         </div>
         ${!canManage ? `<div class="role-badge">Ограниченный доступ</div>` : ""}
       </div>
 
       ${forcedPasswordNotice}
 
-      <div class="two-col">
-        <div class="content-gap">
-          <div class="card slide-up">
-            <div class="card-header"><h3>WebSocket сервер</h3></div>
-            <div class="card-body">
-              <div class="settings-rows">
-                <div class="settings-row"><span>Статус</span><span class="badge ${wsStatus.wsRunning ? "success" : "danger"}">${wsStatus.wsRunning ? "Работает" : "Остановлен"}</span></div>
-                <div class="settings-row"><span>Порт</span><span>${wsStatus.wsPort || 8080}</span></div>
-                <div class="settings-row"><span>Клиентов</span><span class="badge muted">${wsStatus.wsClients || 0}</span></div>
+      <div class="settings-grid">
+        <section class="card settings-card">
+          <div class="card-header"><h3>WebSocket сервер</h3></div>
+          <div class="card-body">
+            <div class="settings-rows">
+              <div class="settings-row">
+                <span>Статус</span>
+                <span class="badge ${wsStatus.wsRunning ? "success" : "danger"}">
+                  ${wsStatus.wsRunning ? "Работает" : "Остановлен"}
+                </span>
+              </div>
+              <div class="settings-row">
+                <span>Порт</span>
+                <span>${Number(wsStatus.wsPort || 8080)}</span>
+              </div>
+              <div class="settings-row">
+                <span>Адрес</span>
+                <span style="color:var(--accent);font-family:monospace;">ws://127.0.0.1:${Number(wsStatus.wsPort || 8080)}</span>
+              </div>
+              <div class="settings-row">
+                <span>Клиентов подключено</span>
+                <span class="badge muted">${Number(wsStatus.wsClients || 0)}</span>
               </div>
             </div>
           </div>
+        </section>
 
-          <div class="card slide-up">
-            <div class="card-header"><h3>Смена пароля</h3></div>
-            <div class="card-body">
-              <div class="settings-rows">
-                <div class="settings-row"><span>Хеширование</span><span class="badge success">PBKDF2 · 100K</span></div>
-                <div class="settings-row"><span>Соль</span><span class="badge success">256-bit CSPRNG</span></div>
+        <section class="card settings-card">
+          <div class="card-header"><h3>Смена пароля</h3></div>
+          <div class="card-body">
+            <div class="settings-rows">
+              <div class="settings-row">
+                <span>Хеширование</span>
+                <span class="badge success">PBKDF2 · 100K</span>
               </div>
-              <div style="margin-top:12px;">
-                <button class="btn primary" id="changePwBtn" style="width:100%;">Сменить пароль</button>
+              <div class="settings-row">
+                <span>Соль</span>
+                <span>256-bit CSPRNG</span>
+              </div>
+              <div class="settings-row">
+                <span>Смена пароля при входе</span>
+                <span class="badge success">Включено</span>
               </div>
             </div>
+            <div style="margin-top:14px;">
+              <button class="btn primary" id="changePwBtn" style="width:100%;">Сменить пароль</button>
+            </div>
           </div>
+        </section>
 
-          <div class="card slide-up">
-            <div class="card-header"><h3>База данных</h3></div>
-            <div class="card-body">
-              <div class="settings-rows">
-                <div class="settings-row"><span>Тип</span><span>SQLite</span></div>
-                <div class="settings-row"><span>Файл</span><span style="font-family:monospace;color:var(--text-muted);">siem_agent.db</span></div>
-                <div class="settings-row"><span>Событий</span><span id="dbEvents">${data.totalEvents}</span></div>
-                <div class="settings-row"><span>Алертов</span><span id="dbAlerts">${data.totalAlerts}</span></div>
+        <section class="card settings-card">
+          <div class="card-header"><h3>База данных</h3></div>
+          <div class="card-body">
+            <div class="settings-rows">
+              <div class="settings-row">
+                <span>Тип</span>
+                <span>SQLite</span>
               </div>
-              ${canClearData ? `
-                <div style="display:flex;gap:8px;margin-top:12px;">
-                  <button class="btn danger" style="flex:1;" id="clearEventsBtn">Очистить события</button>
-                  <button class="btn danger" style="flex:1;" id="clearAlertsBtn">Очистить алерты</button>
-                </div>
-              ` : ""}
-            </div>
-          </div>
-        </div>
-
-        <div class="content-gap">
-          <div class="card slide-up">
-            <div class="card-header"><h3>О системе</h3></div>
-            <div class="card-body">
-              <div class="settings-rows">
-                <div class="settings-row"><span>Название</span><span>SIEM Agent</span></div>
-                <div class="settings-row"><span>Версия</span><span>1.0.0</span></div>
-                <div class="settings-row"><span>Платформа</span><span>Web console</span></div>
-                <div class="settings-row"><span>Назначение</span><span>Мониторинг безопасности</span></div>
+              <div class="settings-row">
+                <span>Файл</span>
+                <span style="font-family:monospace;color:var(--text-muted);">siem_agent.db</span>
+              </div>
+              <div class="settings-row">
+                <span>Расположение</span>
+                <span style="font-family:monospace;color:var(--text-muted);">~/.local/share/SIEMAgent</span>
               </div>
             </div>
-          </div>
 
-          <div class="card slide-up">
-            <div class="card-header"><h3>Экспорт отчетов</h3></div>
-            <div class="card-body content-gap">
-              <button class="btn primary" id="expEventsBtn" style="width:100%;">События (CSV)</button>
-              <button class="btn primary" id="expAlertsBtn" style="width:100%;">Алерты (CSV)</button>
-              <button class="btn primary" id="expReportBtn" style="width:100%;">Отчет (JSON)</button>
-            </div>
-          </div>
-
-          <div class="card slide-up">
-            <div class="card-header">
-              <h3>Правила корреляции</h3>
-              <span class="badge muted" id="rulesCount">${canAccessRules ? `${rulesData.length} правил` : "Недоступно"}</span>
-            </div>
-            <div class="card-body">
-              <div id="rulesList" class="content-gap" style="max-height:300px;overflow-y:auto;">
-                ${canAccessRules ? renderRulesList(rulesData, canManage) : '<div style="text-align:center;padding:20px;color:var(--text-muted);">Раздел доступен только администратору</div>'}
+            ${canClearData ? `
+              <div class="settings-danger-row">
+                <button class="btn danger" id="clearEventsBtn">Очистить события</button>
+                <button class="btn danger" id="clearAlertsBtn">Очистить алерты</button>
               </div>
-              ${canAccessRules && canManage ? `<button class="btn primary" style="width:100%;margin-top:12px;" id="addRuleBtn">+ Добавить правило</button>` : ""}
+            ` : ""}
+          </div>
+        </section>
+
+        <section class="card settings-card">
+          <div class="card-header"><h3>О системе</h3></div>
+          <div class="card-body">
+            <div class="settings-rows">
+              <div class="settings-row">
+                <span>Название</span>
+                <span>SIEM Agent</span>
+              </div>
+              <div class="settings-row">
+                <span>Версия</span>
+                <span>1.0.0</span>
+              </div>
+              <div class="settings-row">
+                <span>Платформа</span>
+                <span>Web console</span>
+              </div>
+              <div class="settings-row">
+                <span>Назначение</span>
+                <span>Мониторинг безопасности</span>
+              </div>
             </div>
           </div>
-        </div>
+        </section>
       </div>
+
+      ${canAccessRules ? `
+        <section class="card settings-rules-card">
+          <div class="card-header settings-rules-header">
+            <h3>Правила корреляции</h3>
+            <div class="settings-rules-actions">
+              <span class="badge muted">${rulesData.length} правил</span>
+              ${canManage ? `<button class="btn primary" id="addRuleBtn">+ Добавить правило</button>` : ""}
+            </div>
+          </div>
+          <div class="card-body settings-rules-body">
+            <div id="rulesList" class="settings-rules-list">
+              ${renderRulesList(rulesData, canManage)}
+            </div>
+          </div>
+        </section>
+      ` : ""}
+
+      <section class="card settings-export-card">
+        <div class="card-header"><h3>Экспорт отчетов</h3></div>
+        <div class="card-body">
+          <div class="settings-export-grid">
+            <button class="btn primary" id="expEventsBtn">События (CSV)</button>
+            <button class="btn primary" id="expAlertsBtn">Алерты (CSV)</button>
+            <button class="btn primary" id="expReportBtn">Отчет (JSON)</button>
+          </div>
+        </div>
+      </section>
     </section>
   `;
 
@@ -193,10 +224,9 @@ export async function renderSettings({
         try {
           await clearEvents();
           showToast("События очищены", "success");
-          root.querySelector("#dbEvents").textContent = "0";
           await onRefresh?.();
         } catch (e) {
-          showToast(e.message, "danger");
+          showToast(e.message || "Не удалось очистить события", "danger");
         }
       }
     );
@@ -210,10 +240,9 @@ export async function renderSettings({
         try {
           await clearAlerts();
           showToast("Алерты очищены", "success");
-          root.querySelector("#dbAlerts").textContent = "0";
           await onRefresh?.();
         } catch (e) {
-          showToast(e.message, "danger");
+          showToast(e.message || "Не удалось очистить алерты", "danger");
         }
       }
     );
@@ -224,7 +253,7 @@ export async function renderSettings({
       await exportEventsCsv();
       showToast("События экспортированы", "success");
     } catch (e) {
-      showToast(e.message, "danger");
+      showToast(e.message || "Не удалось экспортировать события", "danger");
     }
   });
 
@@ -233,7 +262,7 @@ export async function renderSettings({
       await exportAlertsCsv();
       showToast("Алерты экспортированы", "success");
     } catch (e) {
-      showToast(e.message, "danger");
+      showToast(e.message || "Не удалось экспортировать алерты", "danger");
     }
   });
 
@@ -242,39 +271,43 @@ export async function renderSettings({
       await exportReportJson();
       showToast("Отчет экспортирован", "success");
     } catch (e) {
-      showToast(e.message, "danger");
+      showToast(e.message || "Не удалось экспортировать отчет", "danger");
     }
   });
 
   if (canAccessRules) {
-    root.querySelectorAll("[data-toggle-rule]").forEach(el => {
+    root.querySelectorAll("[data-toggle-rule]").forEach((el) => {
       el.addEventListener("click", async () => {
         if (!canManage) return;
+
         const id = el.dataset.toggleRule;
         const enabled = el.dataset.enabled === "true";
+
         try {
           await toggleRule(id, !enabled);
           showToast(!enabled ? "Правило включено" : "Правило отключено", "success");
           await onRefresh?.();
         } catch (e) {
-          showToast(e.message, "danger");
+          showToast(e.message || "Не удалось переключить правило", "danger");
         }
       });
     });
 
-    root.querySelectorAll("[data-edit-rule]").forEach(btn => {
+    root.querySelectorAll("[data-edit-rule]").forEach((btn) => {
       btn.addEventListener("click", () => {
         if (!canManage) return;
-        const rule = rulesData.find(r => String(r.id) === btn.dataset.editRule);
+        const rule = rulesData.find((r) => String(r.id) === String(btn.dataset.editRule));
         if (rule) openRuleModal(rule, onRefresh);
       });
     });
 
-    root.querySelectorAll("[data-del-rule]").forEach(btn => {
+    root.querySelectorAll("[data-del-rule]").forEach((btn) => {
       btn.addEventListener("click", () => {
         if (!canManage) return;
+
         const id = btn.dataset.delRule;
         const name = btn.dataset.name || "";
+
         openConfirmModal(
           "Удалить правило?",
           `Правило «${esc(name)}» будет удалено без возможности восстановления.`,
@@ -284,7 +317,7 @@ export async function renderSettings({
               showToast("Правило удалено", "success");
               await onRefresh?.();
             } catch (e) {
-              showToast(e.message, "danger");
+              showToast(e.message || "Не удалось удалить правило", "danger");
             }
           }
         );
@@ -300,18 +333,77 @@ export async function renderSettings({
   return root;
 }
 
-function fetchCount(path) {
-  return fetch(path, {
-    headers: {
-      Authorization: localStorage.getItem("token")
-        ? `Bearer ${localStorage.getItem("token")}`
-        : ""
-    },
-    credentials: "include"
-  })
-    .then(r => r.json())
-    .then(d => (Array.isArray(d) ? d.length : 0))
-    .catch(() => 0);
+function renderRulesList(rules, canManage) {
+  if (!Array.isArray(rules) || !rules.length) {
+    return `
+      <div class="empty-state" style="padding:32px 16px;">
+        <div>Правил нет</div>
+      </div>
+    `;
+  }
+
+  return `
+    <table class="table rules-table">
+      <thead>
+        <tr>
+          <th style="text-align:left;">Название</th>
+          <th style="text-align:center;">Тип</th>
+          <th style="text-align:left;">Событие</th>
+          <th style="text-align:center;">Порог</th>
+          <th style="text-align:center;">Окно (сек)</th>
+          <th style="text-align:center;">Угроза</th>
+          <th style="text-align:center;">Статус</th>
+          ${canManage ? `<th style="text-align:center;">Действия</th>` : ""}
+        </tr>
+      </thead>
+      <tbody>
+        ${rules.map((r) => `
+          <tr>
+            <td>
+              <span style="font-weight:600;color:var(--text-primary);">${esc(r.name || "")}</span>
+            </td>
+            <td style="text-align:center;">
+              <span class="badge ${r.ruleType === "threshold" ? "accent" : "warning"}">
+                ${esc(r.ruleType || "")}
+              </span>
+            </td>
+            <td style="font-family:monospace;color:var(--text-muted);">
+              ${esc(r.matchEventType || "")}
+            </td>
+            <td style="text-align:center;color:var(--text-secondary);">
+              ${Number(r.threshold || 1)}
+            </td>
+            <td style="text-align:center;color:var(--text-secondary);">
+              ${Number(r.windowSeconds || 60)}
+            </td>
+            <td style="text-align:center;">
+              <span class="badge ${sevBadgeClass(r.alertSeverity)}">
+                ${esc(r.alertSeverity || "")}
+              </span>
+            </td>
+            <td style="text-align:center;">
+              <div
+                class="rule-toggle ${r.isEnabled ? "on" : ""}"
+                data-toggle-rule="${esc(r.id)}"
+                data-enabled="${r.isEnabled ? "true" : "false"}"
+                style="${!canManage ? "opacity:.6;pointer-events:none;" : ""}"
+              >
+                <div class="rule-toggle-knob"></div>
+              </div>
+            </td>
+            ${canManage ? `
+              <td style="text-align:center;">
+                <div style="display:flex;justify-content:center;gap:6px;">
+                  <button class="btn mini ghost" data-edit-rule="${esc(r.id)}">Edit</button>
+                  <button class="btn mini danger" data-del-rule="${esc(r.id)}" data-name="${esc(r.name || "")}">Del</button>
+                </div>
+              </td>
+            ` : ""}
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
 }
 
 function openChangePasswordModal({ mustChangePasswordNow = false, onSuccess } = {}) {
@@ -355,13 +447,10 @@ function openChangePasswordModal({ mustChangePasswordNow = false, onSuccess } = 
     </div>
   `);
 
-  setModalFooter(
-    modal,
-    `
-      ${!mustChangePasswordNow ? '<button class="btn ghost" id="pwCancelBtn">Отмена</button>' : ""}
-      <button class="btn primary" id="pwSaveBtn" style="${mustChangePasswordNow ? "width:100%;" : ""}">Сменить пароль</button>
-    `
-  );
+  setModalFooter(modal, `
+    ${!mustChangePasswordNow ? '<button class="btn ghost" id="pwCancelBtn">Отмена</button>' : ""}
+    <button class="btn primary" id="pwSaveBtn" style="${mustChangePasswordNow ? "width:100%;" : ""}">Сменить пароль</button>
+  `);
 
   ensureModalHost().appendChild(modal);
 
@@ -377,11 +466,11 @@ function openChangePasswordModal({ mustChangePasswordNow = false, onSuccess } = 
   }
 
   if (mustChangePasswordNow) {
-    modal.querySelectorAll("[data-modal-close], .modal-close, .modal-backdrop").forEach(el => {
+    modal.querySelectorAll("[data-modal-close], .modal-close, .modal-backdrop").forEach((el) => {
       el.remove();
     });
 
-    const stopEscape = e => {
+    const stopEscape = (e) => {
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
@@ -450,6 +539,9 @@ function openRuleModal(rule, onRefresh) {
     width: "560px"
   });
 
+  const ruleType = isEdit ? String(rule.ruleType || "threshold") : "threshold";
+  const showSecondary = ruleType === "correlation";
+
   setModalBody(modal, `
     <div class="form-grid">
       <div class="form-group">
@@ -460,8 +552,8 @@ function openRuleModal(rule, onRefresh) {
       <div class="form-group">
         <label class="form-label">ТИП ПРАВИЛА</label>
         <select class="input" id="rType">
-          <option value="threshold" ${isEdit && rule.ruleType === "threshold" ? "selected" : ""}>Порог (threshold)</option>
-          <option value="correlation" ${isEdit && rule.ruleType === "correlation" ? "selected" : ""}>Корреляция (correlation)</option>
+          <option value="threshold" ${ruleType === "threshold" ? "selected" : ""}>Порог (threshold)</option>
+          <option value="correlation" ${ruleType === "correlation" ? "selected" : ""}>Корреляция (correlation)</option>
         </select>
       </div>
 
@@ -470,7 +562,7 @@ function openRuleModal(rule, onRefresh) {
         <input class="input" id="rMatchEvent" value="${esc(isEdit ? rule.matchEventType || "" : "")}" />
       </div>
 
-      <div class="form-group" id="rSecondaryGroup" style="${isEdit && rule.ruleType === "correlation" ? "" : "display:none;"}">
+      <div class="form-group" id="rSecondaryGroup" style="${showSecondary ? "" : "display:none;"}">
         <label class="form-label">ВТОРИЧНОЕ СОБЫТИЕ</label>
         <input class="input" id="rSecondaryEvent" value="${esc(isEdit ? rule.secondaryEventType || "" : "")}" />
       </div>
@@ -478,15 +570,15 @@ function openRuleModal(rule, onRefresh) {
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">ПОРОГ</label>
-          <input class="input" type="number" id="rThreshold" value="${isEdit ? (rule.threshold || 1) : 1}" min="1" />
+          <input class="input" type="number" id="rThreshold" value="${isEdit ? Number(rule.threshold || 1) : 1}" min="1" />
         </div>
         <div class="form-group">
           <label class="form-label">ОКНО (сек)</label>
-          <input class="input" type="number" id="rWindow" value="${isEdit ? (rule.windowSeconds || 60) : 60}" min="1" />
+          <input class="input" type="number" id="rWindow" value="${isEdit ? Number(rule.windowSeconds || 60) : 60}" min="1" />
         </div>
         <div class="form-group">
           <label class="form-label">COOLDOWN (сек)</label>
-          <input class="input" type="number" id="rCooldown" value="${isEdit ? (rule.cooldownSeconds || 60) : 60}" min="1" />
+          <input class="input" type="number" id="rCooldown" value="${isEdit ? Number(rule.cooldownSeconds || 60) : 60}" min="1" />
         </div>
       </div>
 
@@ -537,17 +629,16 @@ function openRuleModal(rule, onRefresh) {
       name: modal.querySelector("#rName").value.trim(),
       ruleType: typeSelect.value,
       matchEventType: modal.querySelector("#rMatchEvent").value.trim(),
-      secondaryEventType:
-        typeSelect.value === "correlation"
-          ? modal.querySelector("#rSecondaryEvent").value.trim()
-          : "",
+      secondaryEventType: typeSelect.value === "correlation"
+        ? modal.querySelector("#rSecondaryEvent").value.trim()
+        : "",
       threshold: parseInt(modal.querySelector("#rThreshold").value, 10) || 1,
       windowSeconds: parseInt(modal.querySelector("#rWindow").value, 10) || 60,
       cooldownSeconds: parseInt(modal.querySelector("#rCooldown").value, 10) || 60,
       alertSeverity: modal.querySelector("#rSeverity").value,
       alertTitle: modal.querySelector("#rTitle").value.trim(),
       alertDescription: modal.querySelector("#rDesc").value.trim(),
-      isEnabled: true
+      isEnabled: isEdit ? !!rule.isEnabled : true
     };
 
     const errBox = modal.querySelector("#rError");
@@ -567,46 +658,15 @@ function openRuleModal(rule, onRefresh) {
         await createRule(payload);
         showToast("Правило создано", "success");
       }
+
       closeModal(modalId);
       await onRefresh?.();
     } catch (e) {
-      showErr(errBox, e.message);
+      showErr(errBox, e.message || "Ошибка сохранения");
     }
   });
 
   openModal(modalId);
-}
-
-function renderRulesList(rules, canManage) {
-  if (!rules.length) {
-    return '<div style="text-align:center;padding:20px;color:var(--text-muted);">Правил нет</div>';
-  }
-
-  return rules.map(r => `
-    <div style="display:flex;align-items:center;gap:8px;padding:8px;border-radius:var(--radius-small);border:1px solid ${r.isEnabled ? "var(--border)" : "transparent"};">
-      <div class="rule-toggle ${r.isEnabled ? "on" : ""}" ${canManage ? `data-toggle-rule="${r.id}" data-enabled="${r.isEnabled}"` : ""} style="flex-shrink:0;${!canManage ? "opacity:.6;pointer-events:none;" : ""}">
-        <div class="rule-toggle-knob"></div>
-      </div>
-
-      <div style="flex:1;min-width:0;">
-        <div style="font-weight:600;font-size:var(--font-sm);color:${r.isEnabled ? "var(--text-primary)" : "var(--text-muted)"};">
-          ${esc(r.name || "")}
-        </div>
-        <div style="font-size:var(--font-xs);color:var(--text-muted);">
-          <span class="badge ${r.ruleType === "threshold" ? "accent" : "warning"}" style="height:18px;padding:0 6px;font-size:10px;">${esc(r.ruleType || "")}</span>
-          <span style="font-family:monospace;">${esc(r.matchEventType || "")}</span>
-          <span class="badge ${sevBadgeClass(r.alertSeverity)}" style="height:18px;padding:0 6px;font-size:10px;">${esc(r.alertSeverity || "")}</span>
-        </div>
-      </div>
-
-      ${canManage ? `
-        <div style="display:flex;gap:4px;flex-shrink:0;">
-          <button class="btn mini ghost" data-edit-rule="${r.id}">Edit</button>
-          <button class="btn mini danger" data-del-rule="${r.id}" data-name="${esc(r.name || "")}">Del</button>
-        </div>
-      ` : ""}
-    </div>
-  `).join("");
 }
 
 function showErr(el, text) {
